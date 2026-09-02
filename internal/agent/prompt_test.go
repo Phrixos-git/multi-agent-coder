@@ -34,6 +34,14 @@ func TestPromptBuilderBuildsEveryRole(t *testing.T) {
 			if !strings.Contains(messages[0].Content, "cannot read or write files") || !strings.Contains(messages[0].Content, "cannot execute shell commands") {
 				t.Errorf("system prompt does not enforce capability boundaries: %q", messages[0].Content)
 			}
+			expectedRole := `"role": "` + string(role) + `"`
+			if !strings.Contains(messages[1].Content, expectedRole) {
+				t.Errorf("user prompt does not contain exact role identifier %q: %q", expectedRole, messages[1].Content)
+			}
+			if !strings.Contains(messages[1].Content, `must be one of "coder", "reviewer", "tester", or "fixer"`) ||
+				!strings.Contains(messages[1].Content, `not a role description`) {
+				t.Errorf("user prompt does not explain role identifier semantics: %q", messages[1].Content)
+			}
 		})
 	}
 }

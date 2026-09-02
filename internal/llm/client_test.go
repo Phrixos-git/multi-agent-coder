@@ -28,7 +28,7 @@ func TestChatCompletion(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
-		if request.Model != "qwen-test" || len(request.Messages) != 1 || request.Messages[0].Content != "hello" {
+		if request.Model != "qwen-test" || len(request.Messages) != 1 || request.Messages[0].Content != "hello" || request.MaxTokens != 512 || request.ReasoningEffort != "none" || request.Temperature != 0.2 || request.ResponseFormat.Type != "json_object" {
 			t.Errorf("request body = %+v", request)
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -55,7 +55,7 @@ func TestChatCompletionRetryableStatus(t *testing.T) {
 					http.Error(w, "temporary", status)
 					return
 				}
-				_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
+				_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
 			}))
 			defer server.Close()
 
@@ -64,6 +64,54 @@ func TestChatCompletionRetryableStatus(t *testing.T) {
 				t.Fatalf("error = %v, requests = %d", err, requests.Load())
 			}
 		})
+	}
+}
+
+func TestChatCompletionRoleOptionsAndJSONResponseFormat(t *testing.T) {
+	tests := []struct {
+		role      string
+		maxTokens int
+		timeout   time.Duration
+	}{
+		{role: "coder", maxTokens: 4096, timeout: 300 * time.Second},
+		{role: "reviewer", maxTokens: 1536, timeout: 180 * time.Second},
+		{role: "tester", maxTokens: 1536, timeout: 180 * time.Second},
+		{role: "fixer", maxTokens: 4096, timeout: 300 * time.Second},
+	}
+	for _, test := range tests {
+		t.Run(test.role, func(t *testing.T) {
+			if optionsByRole[test.role].timeout != test.timeout {
+				t.Errorf("timeout = %s, want %s", optionsByRole[test.role].timeout, test.timeout)
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request ChatCompletionRequest
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Fatal(err)
+				}
+				if request.MaxTokens != test.maxTokens || request.ResponseFormat.Type != "json_object" {
+					t.Errorf("request = %+v", request)
+				}
+				_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{}"},"finish_reason":"stop"}]}`))
+			}))
+			defer server.Close()
+
+			if _, err := newTestClient(server.URL, time.Second).ChatCompletion(context.Background(), nil, test.role); err != nil {
+				t.Fatalf("ChatCompletion() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestChatCompletionLengthReturnsTruncatedError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{\"status\":"},"finish_reason":"length"}],"usage":{"completion_tokens":4096}}`))
+	}))
+	defer server.Close()
+
+	_, err := newTestClient(server.URL, time.Second).ChatCompletion(context.Background(), nil, "coder")
+	var llmErr *Error
+	if !errors.As(err, &llmErr) || llmErr.Kind != ErrorTruncated {
+		t.Fatalf("error = %v, want LLMTruncatedError", err)
 	}
 }
 
@@ -151,7 +199,14 @@ func TestChatCompletionDoesNotRetryCallerCancellation(t *testing.T) {
 }
 
 func newTestClient(baseURL string, timeout time.Duration) *Client {
-	return NewClient(config.Config{LLMBaseURL: baseURL, LLMModel: "qwen-test", LLMTimeout: timeout})
+	return NewClient(config.Config{
+		LLMBaseURL:         baseURL,
+		LLMModel:           "qwen-test",
+		LLMTimeout:         timeout,
+		LLMMaxTokens:       512,
+		LLMReasoningEffort: "none",
+		LLMTemperature:     0.2,
+	})
 }
 
 type roundTripperFunc func(*http.Request) (*http.Response, error)

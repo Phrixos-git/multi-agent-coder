@@ -28,7 +28,10 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	server := mcpserver.NewServer(cfg, logger)
+	server, err := mcpserver.NewServer(cfg, logger)
+	if err != nil {
+		return fmt.Errorf("create MCP server: %w", err)
+	}
 	if err := server.Run(ctx); err != nil {
 		return fmt.Errorf("run MCP server: %w", err)
 	}

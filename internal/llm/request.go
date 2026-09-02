@@ -9,6 +9,15 @@ type Message struct {
 // ChatCompletionRequest is the request body accepted by llama-server's
 // OpenAI-compatible chat completions endpoint.
 type ChatCompletionRequest struct {
-	Model    string    `json:"model"`
-	Messages []Message `json:"messages"`
+	Model           string         `json:"model"`
+	Messages        []Message      `json:"messages"`
+	MaxTokens       int            `json:"max_tokens"`
+	ReasoningEffort string         `json:"reasoning_effort"`
+	Temperature     float64        `json:"temperature"`
+	ResponseFormat  ResponseFormat `json:"response_format"`
+}
+
+// ResponseFormat requests a structured JSON object from llama-server.
+type ResponseFormat struct {
+	Type string `json:"type"`
 }

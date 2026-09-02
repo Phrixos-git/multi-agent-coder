@@ -9,10 +9,13 @@ import (
 	roleprompts "github.com/arietis/multi-agent-coder/prompts"
 )
 
-const outputFormat = `Return one JSON object with this shape:
+const outputFormat = `The "role" field is a machine-readable role identifier, not a role description.
+It must be one of "coder", "reviewer", "tester", or "fixer". For this request, it must be %q.
+
+Return one JSON object with this shape:
 {
   "status": "success or needs_input",
-  "role": "the requested role",
+  "role": %q,
   "summary": "short result summary",
   "artifacts": [{"path": "relative path", "content": "complete candidate file content"}],
   "findings": [{"severity": "low, medium, or high", "description": "finding"}],
@@ -76,7 +79,7 @@ func (b *PromptBuilder) Build(input PromptInput) ([]llm.Message, error) {
 	writeListSection(&user, "REQUIREMENTS", input.Requirements)
 	writeFilesSection(&user, input.Files)
 	writeSection(&user, "ADDITIONAL CONTEXT", input.AdditionalContext)
-	writeSection(&user, "OUTPUT FORMAT", outputFormat)
+	writeSection(&user, "OUTPUT FORMAT", fmt.Sprintf(outputFormat, input.Role, input.Role))
 
 	return []llm.Message{
 		{Role: "system", Content: b.systemPrompts[input.Role]},

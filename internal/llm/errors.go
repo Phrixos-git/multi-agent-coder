@@ -9,6 +9,7 @@ const (
 	ErrorConnection ErrorKind = "LLMConnectionError"
 	ErrorTimeout    ErrorKind = "LLMTimeoutError"
 	ErrorResponse   ErrorKind = "LLMResponseError"
+	ErrorTruncated  ErrorKind = "LLMTruncatedError"
 )
 
 // Error is a classified LLM client error. StatusCode is set for HTTP errors.

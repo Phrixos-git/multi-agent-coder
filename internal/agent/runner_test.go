@@ -61,11 +61,11 @@ type recordingClient struct {
 
 type emptyResponseClient struct{}
 
-func (emptyResponseClient) ChatCompletion(context.Context, []llm.Message) (llm.ChatCompletionResponse, error) {
+func (emptyResponseClient) ChatCompletion(context.Context, []llm.Message, ...string) (llm.ChatCompletionResponse, error) {
 	return llm.ChatCompletionResponse{}, nil
 }
 
-func (c *recordingClient) ChatCompletion(_ context.Context, messages []llm.Message) (llm.ChatCompletionResponse, error) {
+func (c *recordingClient) ChatCompletion(_ context.Context, messages []llm.Message, _ ...string) (llm.ChatCompletionResponse, error) {
 	copied := append([]llm.Message(nil), messages...)
 	c.mu.Lock()
 	c.requests = append(c.requests, copied)

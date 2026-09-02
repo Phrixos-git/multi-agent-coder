@@ -11,7 +11,12 @@ import (
 )
 
 func TestLocalAgentHealth(t *testing.T) {
-	server := NewServer(config.Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server, err := NewServer(config.Config{
+		LLMBaseURL: "http://127.0.0.1:8080", RepositoryRoot: t.TempDir(),
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
 	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "test-client", Version: "0.1.0"}, nil)
 	clientTransport, serverTransport := sdkmcp.NewInMemoryTransports()
 

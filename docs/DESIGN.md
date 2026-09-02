@@ -577,13 +577,16 @@ internal/llm/
 
 LLMリクエストには必ずTimeoutを設定する。
 
-Default：
+Agent Role別Default：
 
 ```text
-120 seconds
+Coder:    300 seconds
+Reviewer: 180 seconds
+Tester:   180 seconds
+Fixer:    300 seconds
 ```
 
-設定可能にする。
+Roleを指定しない低レベル呼び出しでは`MAC_LLM_TIMEOUT`を使用する。
 
 ---
 
@@ -787,6 +790,9 @@ multi-agent-coder/
 MAC_LLM_BASE_URL
 MAC_LLM_MODEL
 MAC_LLM_TIMEOUT
+MAC_LLM_MAX_TOKENS
+MAC_LLM_REASONING_EFFORT
+MAC_LLM_TEMPERATURE
 MAC_REPOSITORY_ROOT
 MAC_LOG_LEVEL
 ```
@@ -795,9 +801,23 @@ Default：
 
 ```text
 MAC_LLM_BASE_URL=http://127.0.0.1:8080
-MAC_LLM_TIMEOUT=120s
+MAC_LLM_TIMEOUT=180s
+MAC_LLM_MAX_TOKENS=1024
+MAC_LLM_REASONING_EFFORT=none
+MAC_LLM_TEMPERATURE=0.2
 MAC_LOG_LEVEL=info
 ```
+
+Agent実行時の`max_tokens`はRole別に以下を使用する。
+
+```text
+Coder:    4096
+Reviewer: 1536
+Tester:   1536
+Fixer:    4096
+```
+
+Roleを指定しない低レベル呼び出しでは`MAC_LLM_MAX_TOKENS`を使用する。
 
 Model名は固定しない。
 
@@ -904,6 +924,7 @@ WorkspaceError
 LLMConnectionError
 LLMTimeoutError
 LLMResponseError
+LLMTruncatedError
 InvalidRoleError
 PromptError
 ```

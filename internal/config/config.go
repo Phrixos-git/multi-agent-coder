@@ -3,26 +3,34 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"math"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
 
 const (
-	defaultLLMBaseURL = "http://127.0.0.1:8080"
-	defaultLLMTimeout = 120 * time.Second
-	defaultLogLevel   = "info"
+	defaultLLMBaseURL         = "http://127.0.0.1:8080"
+	defaultLLMTimeout         = 180 * time.Second
+	defaultLLMMaxTokens       = 1024
+	defaultLLMReasoningEffort = "none"
+	defaultLLMTemperature     = 0.2
+	defaultLogLevel           = "info"
 )
 
 // Config contains process configuration loaded from MAC_* environment variables.
 type Config struct {
-	LLMBaseURL     string
-	LLMModel       string
-	LLMTimeout     time.Duration
-	RepositoryRoot string
-	LogLevel       string
+	LLMBaseURL         string
+	LLMModel           string
+	LLMTimeout         time.Duration
+	LLMMaxTokens       int
+	LLMReasoningEffort string
+	LLMTemperature     float64
+	RepositoryRoot     string
+	LogLevel           string
 }
 
 // Load reads and validates configuration from the environment.
@@ -40,13 +48,24 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	maxTokens, err := parseInt("MAC_LLM_MAX_TOKENS", defaultLLMMaxTokens)
+	if err != nil {
+		return Config{}, err
+	}
+	temperature, err := parseFloat("MAC_LLM_TEMPERATURE", defaultLLMTemperature)
+	if err != nil {
+		return Config{}, err
+	}
 
 	cfg := Config{
-		LLMBaseURL:     envOrDefault("MAC_LLM_BASE_URL", defaultLLMBaseURL),
-		LLMModel:       strings.TrimSpace(os.Getenv("MAC_LLM_MODEL")),
-		LLMTimeout:     timeout,
-		RepositoryRoot: repositoryRoot,
-		LogLevel:       strings.ToLower(envOrDefault("MAC_LOG_LEVEL", defaultLogLevel)),
+		LLMBaseURL:         envOrDefault("MAC_LLM_BASE_URL", defaultLLMBaseURL),
+		LLMModel:           strings.TrimSpace(os.Getenv("MAC_LLM_MODEL")),
+		LLMTimeout:         timeout,
+		LLMMaxTokens:       maxTokens,
+		LLMReasoningEffort: envOrDefault("MAC_LLM_REASONING_EFFORT", defaultLLMReasoningEffort),
+		LLMTemperature:     temperature,
+		RepositoryRoot:     repositoryRoot,
+		LogLevel:           strings.ToLower(envOrDefault("MAC_LOG_LEVEL", defaultLogLevel)),
 	}
 	if err := cfg.validate(); err != nil {
 		return Config{}, err
@@ -61,6 +80,15 @@ func (c *Config) validate() error {
 	}
 	if c.LLMTimeout <= 0 {
 		return fmt.Errorf("ConfigError: MAC_LLM_TIMEOUT must be greater than zero")
+	}
+	if c.LLMMaxTokens <= 0 {
+		return fmt.Errorf("ConfigError: MAC_LLM_MAX_TOKENS must be greater than zero")
+	}
+	if strings.TrimSpace(c.LLMReasoningEffort) == "" {
+		return fmt.Errorf("ConfigError: MAC_LLM_REASONING_EFFORT must not be empty")
+	}
+	if math.IsNaN(c.LLMTemperature) || c.LLMTemperature < 0 || c.LLMTemperature > 2 {
+		return fmt.Errorf("ConfigError: MAC_LLM_TEMPERATURE must be between 0 and 2")
 	}
 
 	root, err := filepath.Abs(c.RepositoryRoot)
@@ -109,4 +137,28 @@ func parseDuration(name string, fallback time.Duration) (time.Duration, error) {
 		return 0, fmt.Errorf("ConfigError: parse %s: %w", name, err)
 	}
 	return duration, nil
+}
+
+func parseInt(name string, fallback int) (int, error) {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("ConfigError: parse %s: %w", name, err)
+	}
+	return parsed, nil
+}
+
+func parseFloat(name string, fallback float64) (float64, error) {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return 0, fmt.Errorf("ConfigError: parse %s: %w", name, err)
+	}
+	return parsed, nil
 }

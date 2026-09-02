@@ -9,7 +9,7 @@ import (
 
 // ChatCompleter is the shared LLM capability needed by all agents.
 type ChatCompleter interface {
-	ChatCompletion(context.Context, []llm.Message) (llm.ChatCompletionResponse, error)
+	ChatCompletion(context.Context, []llm.Message, ...string) (llm.ChatCompletionResponse, error)
 }
 
 // Runner executes independent logical agents against one shared LLM client.
@@ -37,7 +37,7 @@ func (r *Runner) Run(ctx context.Context, input PromptInput) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	response, err := r.client.ChatCompletion(ctx, messages)
+	response, err := r.client.ChatCompletion(ctx, messages, string(input.Role))
 	if err != nil {
 		return "", fmt.Errorf("run %s agent: %w", input.Role, err)
 	}
