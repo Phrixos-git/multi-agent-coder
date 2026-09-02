@@ -1,0 +1,48 @@
+# Go build artifacts
+/multi-agent-coder
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+
+# Test and coverage artifacts
+/coverage/
+/test-results/
+coverage.*
+*.coverprofile
+*.prof
+
+# Logs
+/logs/
+*.log
+
+# Temporary files
+/tmp/
+/temp/
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# Environment and local configuration
+.env
+.env.*
+!.env.example
+*.local
+*.local.*
+config.local.*
+
+# Codex local state
+/.codex/
+
+# IDE files
+/.idea/
+/.vscode/
+*.iml
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+Desktop.ini
