@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"log/slog"
+	"os/exec"
 	"time"
 
 	"github.com/arietis/multi-agent-coder/internal/config"
@@ -17,9 +18,10 @@ type healthInput struct{}
 type HealthOutput struct {
 	Status string `json:"status" jsonschema:"MCP server status"`
 	LLM    string `json:"llm" jsonschema:"local LLM status"`
+	Pi     string `json:"pi,omitempty" jsonschema:"Pi executable status when configured"`
 }
 
-func registerHealthTool(server *sdkmcp.Server, _ config.Config, logger *slog.Logger) {
+func registerHealthTool(server *sdkmcp.Server, cfg config.Config, logger *slog.Logger) {
 	sdkmcp.AddTool(server, &sdkmcp.Tool{
 		Name:        "local_agent_health",
 		Description: "Report MCP server health. LLM connectivity is added in Phase 2.",
@@ -27,6 +29,14 @@ func registerHealthTool(server *sdkmcp.Server, _ config.Config, logger *slog.Log
 		started := time.Now()
 		requestID := newRequestID()
 		output := HealthOutput{Status: "ok", LLM: "not_checked"}
+		if cfg.CoderBackend == "pi" {
+			if _, err := exec.LookPath(cfg.PiExecutable); err != nil {
+				output.Status = "degraded"
+				output.Pi = "not_found"
+			} else {
+				output.Pi = "available"
+			}
+		}
 		logger.InfoContext(ctx, "MCP tool request completed",
 			"role", "health",
 			"request_id", requestID,

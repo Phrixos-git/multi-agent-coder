@@ -44,14 +44,19 @@ type RunError struct {
 
 // RunOutput is the validated local agent result.
 type RunOutput struct {
-	Status    string     `json:"status"`
-	Role      string     `json:"role"`
-	Summary   string     `json:"summary"`
-	Artifacts []Artifact `json:"artifacts"`
-	Findings  []Finding  `json:"findings"`
-	Risks     []string   `json:"risks"`
-	Notes     []string   `json:"notes"`
-	Error     *RunError  `json:"error,omitempty"`
+	Status           string     `json:"status"`
+	Role             string     `json:"role"`
+	Summary          string     `json:"summary"`
+	Artifacts        []Artifact `json:"artifacts"`
+	Findings         []Finding  `json:"findings"`
+	Risks            []string   `json:"risks"`
+	Notes            []string   `json:"notes"`
+	Error            *RunError  `json:"error,omitempty"`
+	Backend          string     `json:"backend,omitempty"`
+	Patch            string     `json:"patch,omitempty"`
+	ChangedFiles     []string   `json:"changed_files,omitempty"`
+	ExecutionResults []string   `json:"execution_results,omitempty"`
+	Warnings         []string   `json:"warnings,omitempty"`
 }
 
 type agentRunner interface {
@@ -65,7 +70,7 @@ type fileReader interface {
 func registerRunTool(server *sdkmcp.Server, runner agentRunner, reader fileReader, logger *slog.Logger) {
 	sdkmcp.AddTool(server, &sdkmcp.Tool{
 		Name:        "local_agent_run",
-		Description: "Run an independent coder, reviewer, tester, or fixer using explicitly selected repository files. This tool never modifies the repository.",
+		Description: "Run an independent coder, reviewer, tester, or fixer. Direct mode is read-only; optional Pi coder mode edits only an isolated temporary Git worktree.",
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, input RunInput) (*sdkmcp.CallToolResult, RunOutput, error) {
 		started, requestID := time.Now(), newRequestID()
 		output := executeRun(ctx, runner, reader, input)
@@ -82,7 +87,24 @@ func executeRun(ctx context.Context, runner agentRunner, reader fileReader, inpu
 		return failedOutput(input.Role, err)
 	}
 	files := make([]agent.File, 0, len(input.Files))
+	needsFiles := true
+	if policy, ok := runner.(interface{ NeedsInputFiles(agent.Role) bool }); ok {
+		needsFiles = policy.NeedsInputFiles(role)
+	}
+	if !needsFiles {
+		for _, path := range input.Files {
+			if validator, ok := reader.(interface{ ValidatePath(string) error }); ok {
+				if err := validator.ValidatePath(path); err != nil {
+					return failedOutput(input.Role, err)
+				}
+			}
+			files = append(files, agent.File{Path: path})
+		}
+	}
 	for _, path := range input.Files {
+		if !needsFiles {
+			break
+		}
 		content, err := reader.ReadFile(path)
 		if err != nil {
 			return failedOutput(input.Role, err)
@@ -98,6 +120,9 @@ func executeRun(ctx context.Context, runner agentRunner, reader fileReader, inpu
 	output, err := parseRunOutput(raw, role)
 	if err != nil {
 		return failedOutput(input.Role, err)
+	}
+	if output.Backend == "" {
+		output.Backend = "direct"
 	}
 	return output
 }
@@ -116,7 +141,7 @@ func parseRunOutput(raw string, expectedRole agent.Role) (RunOutput, error) {
 		}
 		return RunOutput{}, &llm.Error{Kind: llm.ErrorResponse, Err: fmt.Errorf("validate agent JSON: %w", err)}
 	}
-	if output.Status != "success" && output.Status != "needs_input" {
+	if output.Status != "success" && output.Status != "needs_input" && output.Status != "error" {
 		return RunOutput{}, responseValidationError("invalid status %q", output.Status)
 	}
 	if output.Role != string(expectedRole) {
@@ -125,10 +150,16 @@ func parseRunOutput(raw string, expectedRole agent.Role) (RunOutput, error) {
 	if strings.TrimSpace(output.Summary) == "" {
 		return RunOutput{}, responseValidationError("summary is empty")
 	}
+	if output.Status == "error" && output.Error == nil {
+		return RunOutput{}, responseValidationError("error status has no error details")
+	}
 	output.Artifacts = nonNil(output.Artifacts)
 	output.Findings = nonNil(output.Findings)
 	output.Risks = nonNil(output.Risks)
 	output.Notes = nonNil(output.Notes)
+	output.ChangedFiles = nonNil(output.ChangedFiles)
+	output.ExecutionResults = nonNil(output.ExecutionResults)
+	output.Warnings = nonNil(output.Warnings)
 	return output, nil
 }
 
@@ -146,6 +177,7 @@ func errorKind(err error) string {
 	var prompt *agent.PromptError
 	var workspaceErr *workspace.WorkspaceError
 	var llmErr *llm.Error
+	var categorized interface{ ErrorKind() string }
 	switch {
 	case errors.As(err, &invalidRole):
 		return "InvalidRoleError"
@@ -155,7 +187,15 @@ func errorKind(err error) string {
 		return "WorkspaceError"
 	case errors.As(err, &llmErr):
 		return string(llmErr.Kind)
+	case errors.As(err, &categorized):
+		return categorized.ErrorKind()
 	default:
+		message := err.Error()
+		for _, kind := range []string{"PiExecutableNotFound", "PiStartupError", "PiRPCProtocolError", "PiTimeoutError", "PiCanceledError", "PiAbnormalExit", "GitRepositoryError", "WorktreeCreateError", "DiffCollectionError", "CleanupError"} {
+			if strings.Contains(message, kind) {
+				return kind
+			}
+		}
 		return "InternalError"
 	}
 }

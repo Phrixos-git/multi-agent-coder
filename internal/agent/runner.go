@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"fmt"
-
 	"github.com/arietis/multi-agent-coder/internal/llm"
 )
 
@@ -14,8 +13,7 @@ type ChatCompleter interface {
 
 // Runner executes independent logical agents against one shared LLM client.
 type Runner struct {
-	client  ChatCompleter
-	prompts *PromptBuilder
+	backends map[Role]Backend
 }
 
 // NewRunner constructs a runner using embedded role prompts.
@@ -23,29 +21,34 @@ func NewRunner(client ChatCompleter) (*Runner, error) {
 	if client == nil {
 		return nil, fmt.Errorf("create agent runner: LLM client is nil")
 	}
-	promptBuilder, err := NewPromptBuilder()
+	direct, err := NewDirectBackend(client)
 	if err != nil {
 		return nil, err
 	}
-	return &Runner{client: client, prompts: promptBuilder}, nil
+	return NewRunnerWithBackends(direct, nil), nil
+}
+
+func NewRunnerWithBackends(direct Backend, coder Backend) *Runner {
+	if coder == nil {
+		coder = direct
+	}
+	return &Runner{backends: map[Role]Backend{RoleCoder: coder, RoleReviewer: direct, RoleTester: direct, RoleFixer: direct}}
 }
 
 // Run creates a fresh request for one role and returns its generated content.
 // The runner stores no conversation messages between calls.
 func (r *Runner) Run(ctx context.Context, input PromptInput) (string, error) {
-	messages, err := r.prompts.Build(input)
-	if err != nil {
-		return "", err
+	b, ok := r.backends[input.Role]
+	if !ok || b == nil {
+		return "", fmt.Errorf("run %s agent: backend is not configured", input.Role)
 	}
-	response, err := r.client.ChatCompletion(ctx, messages, string(input.Role))
-	if err != nil {
-		return "", fmt.Errorf("run %s agent: %w", input.Role, err)
+	return b.Run(ctx, input)
+}
+
+func (r *Runner) NeedsInputFiles(role Role) bool {
+	b := r.backends[role]
+	if consumer, ok := b.(suppliedFileConsumer); ok {
+		return consumer.UsesSuppliedFiles()
 	}
-	if len(response.Choices) == 0 {
-		return "", fmt.Errorf("run %s agent: %w", input.Role, &llm.Error{
-			Kind: llm.ErrorResponse,
-			Err:  fmt.Errorf("response contains no choices"),
-		})
-	}
-	return response.Choices[0].Message.Content, nil
+	return true
 }

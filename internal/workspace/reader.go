@@ -42,6 +42,9 @@ func (r *Reader) ReadFile(path string) ([]byte, error) {
 	return r.readConfined(path)
 }
 
+// ValidatePath checks a requested path without reading its content.
+func (r *Reader) ValidatePath(path string) error { _, err := r.validator.Validate(path); return err }
+
 // readConfined performs the actual operation relative to an open directory
 // handle. os.Root prevents symlink replacement between validation and use
 // from redirecting the read outside the repository.

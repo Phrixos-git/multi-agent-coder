@@ -54,6 +54,26 @@ func TestRunnerRejectsResponseWithoutChoices(t *testing.T) {
 	}
 }
 
+func TestRunnerSelectsCoderBackendOnlyForCoder(t *testing.T) {
+	direct, coder := &recordingBackend{}, &recordingBackend{}
+	runner := NewRunnerWithBackends(direct, coder)
+	for _, role := range []Role{RoleCoder, RoleReviewer, RoleTester, RoleFixer} {
+		if _, err := runner.Run(context.Background(), PromptInput{Role: role}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if coder.calls != 1 || direct.calls != 3 {
+		t.Fatalf("coder calls=%d direct calls=%d", coder.calls, direct.calls)
+	}
+}
+
+type recordingBackend struct{ calls int }
+
+func (b *recordingBackend) Run(context.Context, PromptInput) (string, error) {
+	b.calls++
+	return "{}", nil
+}
+
 type recordingClient struct {
 	mu       sync.Mutex
 	requests [][]llm.Message

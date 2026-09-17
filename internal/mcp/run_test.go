@@ -76,6 +76,23 @@ func TestExecuteRunReturnsStructuredErrorForBrokenLLMResponse(t *testing.T) {
 	}
 }
 
+func TestExecuteRunPreservesBackendPartialError(t *testing.T) {
+	raw := `{"status":"error","role":"coder","summary":"Pi failed","artifacts":[],"findings":[],"risks":[],"notes":[],"backend":"pi","patch":"partial","changed_files":["x.go"],"execution_results":[],"warnings":[],"error":{"kind":"PiAbnormalExit","message":"failed"}}`
+	out := executeRun(context.Background(), staticRunner{response: raw}, noFilesReader{}, RunInput{Role: "coder", Task: "task"})
+	if out.Status != "error" || out.Patch != "partial" || out.Error == nil || out.Error.Kind != "PiAbnormalExit" {
+		t.Fatalf("output=%#v", out)
+	}
+}
+
+func TestExecuteRunPiPolicyValidatesWithoutReadingSourceContent(t *testing.T) {
+	reader := &validatingReader{}
+	runner := piPolicyRunner{staticRunner{response: `{"status":"success","role":"coder","summary":"ok","artifacts":[],"findings":[],"risks":[],"notes":[],"backend":"pi"}`}}
+	out := executeRun(context.Background(), runner, reader, RunInput{Role: "coder", Task: "task", Files: []string{"x.go"}})
+	if out.Status != "success" || reader.validated != 1 || reader.reads != 0 {
+		t.Fatalf("output=%#v reader=%+v", out, reader)
+	}
+}
+
 func TestExecuteRunClassifiesHTTPAgentResponses(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -145,6 +162,15 @@ func TestExecuteRunRejectsRoleDescriptionsForAllRoles(t *testing.T) {
 type staticRunner struct{ response string }
 
 func (r staticRunner) Run(context.Context, agent.PromptInput) (string, error) { return r.response, nil }
+
+type piPolicyRunner struct{ staticRunner }
+
+func (piPolicyRunner) NeedsInputFiles(agent.Role) bool { return false }
+
+type validatingReader struct{ validated, reads int }
+
+func (r *validatingReader) ReadFile(string) ([]byte, error) { r.reads++; return []byte("dirty"), nil }
+func (r *validatingReader) ValidatePath(string) error       { r.validated++; return nil }
 
 type noFilesReader struct{}
 

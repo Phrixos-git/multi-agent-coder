@@ -1102,6 +1102,24 @@ E2E
 
 ---
 
+# 31. Optional Pi coder backend
+
+Version 1のDirect経路を既定として維持しつつ、coderに限り設定でPi Coding Agent RPC backendを選択できる。これはVersion 1の「LLMによる直接編集・Shell実行禁止」を置き換えるものではなく、一時Git worktreeに限定された明示的なopt-in経路である。
+
+```text
+local_agent_run
+  ├─ coder + MAC_CODER_BACKEND=pi -> PiBackend
+  └─ その他                         -> DirectBackend
+```
+
+PiBackendは実行時のGit `HEAD`から一時branch/worktreeを作り、Piを `--mode rpc --no-session` で起動する。stdin/stdoutはLF区切りJSONL、stderrは診断用として分離し、`agent_settled`を完了イベントとする。Context cancelまたは有限timeout時にはPiプロセスグループを終了する。
+
+変更結果はPiの文章ではなく `git diff --name-only` と `git diff --binary HEAD` を正とする。untracked fileはintent-to-addによりpatchへ含める。差分回収後にworktreeを強制削除し、一時branchも削除する。差分回収が回復不能に失敗した場合は診断を保持した上で専用の強制cleanupを行う。本体working treeの未コミット変更は許容するがPiへ同期しない。
+
+worktreeはOSレベルsandboxではない。Piのインストール、models.json、provider/model、llama.cpp Serverは外部管理とし、Piが見つからない場合はDirectへfallbackしない。
+
+---
+
 # 31. Version 2候補
 
 Version 1完成後に検討する。

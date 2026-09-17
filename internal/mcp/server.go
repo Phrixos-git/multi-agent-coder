@@ -7,6 +7,7 @@ import (
 	"github.com/arietis/multi-agent-coder/internal/agent"
 	"github.com/arietis/multi-agent-coder/internal/config"
 	"github.com/arietis/multi-agent-coder/internal/llm"
+	"github.com/arietis/multi-agent-coder/internal/pirpc"
 	"github.com/arietis/multi-agent-coder/internal/workspace"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -31,11 +32,16 @@ func newServer(cfg config.Config, logger *slog.Logger, completer agent.ChatCompl
 	if err != nil {
 		return nil, err
 	}
-	runner, err := agent.NewRunner(completer)
+	direct, err := agent.NewDirectBackend(completer)
 	if err != nil {
 		_ = reader.Close()
 		return nil, err
 	}
+	var coder agent.Backend = direct
+	if cfg.CoderBackend == "pi" {
+		coder = agent.NewPiBackend(cfg.RepositoryRoot, pirpc.Config{Executable: cfg.PiExecutable, Provider: cfg.PiProvider, Model: cfg.PiModel, Args: cfg.PiRPCArgs}, cfg.PiTimeout, logger)
+	}
+	runner := agent.NewRunnerWithBackends(direct, coder)
 	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: serverName, Version: serverVersion}, nil)
 	registerHealthTool(server, cfg, logger)
 	registerRunTool(server, runner, reader, logger)
