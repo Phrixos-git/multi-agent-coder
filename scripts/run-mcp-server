@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+repository_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+server_binary="${repository_root}/bin/multi-agent-coder"
+log_directory="${MAC_LOG_DIR:-${repository_root}/logs}"
+
+umask 077
+mkdir -p -- "${log_directory}"
+log_file="${log_directory}/multi-agent-coder-$(date +%F).log"
+
+# Keep stdout exclusively for MCP protocol traffic. Persist stderr while also
+# forwarding it to the parent process for interactive diagnostics.
+exec 3>&2
+exec 2> >(tee -a -- "${log_file}" >&3)
+
+if [[ ! -x "${server_binary}" ]]; then
+	printf 'multi-agent-coder executable not found or not executable: %s\n' "${server_binary}" >&2
+	exit 1
+fi
+
+exec "${server_binary}"

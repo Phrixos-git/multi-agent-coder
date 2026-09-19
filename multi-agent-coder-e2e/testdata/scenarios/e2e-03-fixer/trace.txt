@@ -1,0 +1,4 @@
+agent=coder result=success
+agent=reviewer result=failed error_type=review_failure
+agent=fixer result=success
+agent=tester result=success

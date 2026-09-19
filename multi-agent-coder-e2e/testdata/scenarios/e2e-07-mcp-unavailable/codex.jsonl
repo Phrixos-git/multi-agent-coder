@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"recorded-e2e-07"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"type":"agent_message","text":"multi-agent-coder unavailable — mcp_error"}}
+{"type":"turn.completed"}

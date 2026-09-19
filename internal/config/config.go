@@ -15,7 +15,11 @@ import (
 const (
 	defaultLLMBaseURL         = "http://127.0.0.1:8080"
 	defaultLLMTimeout         = 180 * time.Second
-	defaultLLMMaxTokens       = 1024
+	defaultLLMMaxTokens       = 4096
+	defaultCoderMaxTokens     = 4096
+	defaultReviewerMaxTokens  = 1536
+	defaultTesterMaxTokens    = 1536
+	defaultFixerMaxTokens     = 4096
 	defaultLLMReasoningEffort = "none"
 	defaultLLMTemperature     = 0.2
 	defaultLogLevel           = "info"
@@ -30,6 +34,10 @@ type Config struct {
 	LLMModel           string
 	LLMTimeout         time.Duration
 	LLMMaxTokens       int
+	CoderMaxTokens     int
+	ReviewerMaxTokens  int
+	TesterMaxTokens    int
+	FixerMaxTokens     int
 	LLMReasoningEffort string
 	LLMTemperature     float64
 	RepositoryRoot     string
@@ -61,6 +69,22 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	coderMaxTokens, err := parseInt("MAC_CODER_MAX_TOKENS", defaultCoderMaxTokens)
+	if err != nil {
+		return Config{}, err
+	}
+	reviewerMaxTokens, err := parseInt("MAC_REVIEWER_MAX_TOKENS", defaultReviewerMaxTokens)
+	if err != nil {
+		return Config{}, err
+	}
+	testerMaxTokens, err := parseInt("MAC_TESTER_MAX_TOKENS", defaultTesterMaxTokens)
+	if err != nil {
+		return Config{}, err
+	}
+	fixerMaxTokens, err := parseInt("MAC_FIXER_MAX_TOKENS", defaultFixerMaxTokens)
+	if err != nil {
+		return Config{}, err
+	}
 	temperature, err := parseFloat("MAC_LLM_TEMPERATURE", defaultLLMTemperature)
 	if err != nil {
 		return Config{}, err
@@ -75,6 +99,10 @@ func Load() (Config, error) {
 		LLMModel:           strings.TrimSpace(os.Getenv("MAC_LLM_MODEL")),
 		LLMTimeout:         timeout,
 		LLMMaxTokens:       maxTokens,
+		CoderMaxTokens:     coderMaxTokens,
+		ReviewerMaxTokens:  reviewerMaxTokens,
+		TesterMaxTokens:    testerMaxTokens,
+		FixerMaxTokens:     fixerMaxTokens,
 		LLMReasoningEffort: envOrDefault("MAC_LLM_REASONING_EFFORT", defaultLLMReasoningEffort),
 		LLMTemperature:     temperature,
 		RepositoryRoot:     repositoryRoot,
@@ -102,6 +130,18 @@ func (c *Config) validate() error {
 	}
 	if c.LLMMaxTokens <= 0 {
 		return fmt.Errorf("ConfigError: MAC_LLM_MAX_TOKENS must be greater than zero")
+	}
+	if c.CoderMaxTokens <= 0 {
+		return fmt.Errorf("ConfigError: MAC_CODER_MAX_TOKENS must be greater than zero")
+	}
+	if c.ReviewerMaxTokens <= 0 {
+		return fmt.Errorf("ConfigError: MAC_REVIEWER_MAX_TOKENS must be greater than zero")
+	}
+	if c.TesterMaxTokens <= 0 {
+		return fmt.Errorf("ConfigError: MAC_TESTER_MAX_TOKENS must be greater than zero")
+	}
+	if c.FixerMaxTokens <= 0 {
+		return fmt.Errorf("ConfigError: MAC_FIXER_MAX_TOKENS must be greater than zero")
 	}
 	if strings.TrimSpace(c.LLMReasoningEffort) == "" {
 		return fmt.Errorf("ConfigError: MAC_LLM_REASONING_EFFORT must not be empty")

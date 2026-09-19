@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+cache="${TMPDIR:-/tmp}/multi-agent-coder-e2e-go-cache"
+trace="${root}/testdata/scenarios/e2e-03-fixer/trace.txt"
+mkdir -p -- "${cache}"
+expected=$'agent=coder result=success\nagent=reviewer result=failed error_type=review_failure\nagent=fixer result=success\nagent=tester result=success'
+actual="$(sed -n '1,4p' "${trace}")"
+if [[ "${actual}" != "${expected}" ]]; then
+	printf 'expected:\n%s\nactual:\n%s\nfailed stage: trace\nerror type: tool_error\n' "${expected}" "${actual}" >&2
+	exit 1
+fi
+(cd -- "${root}" && env GOCACHE="${cache}" go test ./testdata/scenarios/e2e-03-fixer/current)
+printf '%-30s %s\n' 'E2E-03 fixer' 'PASS'

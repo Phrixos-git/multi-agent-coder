@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+e2e_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+server_root="$(cd -- "${e2e_root}/.." && pwd)"
+cache="${TMPDIR:-/tmp}/multi-agent-coder-e2e-go-cache"
+trace="${e2e_root}/testdata/scenarios/e2e-08-invalid-json/trace.txt"
+mkdir -p -- "${cache}"
+output_mcp="$(cd -- "${server_root}" && env GOCACHE="${cache}" go test ./internal/mcp -run 'TestExecuteRunReturnsStructuredErrorForBrokenLLMResponse$|TestExecuteRunClassifiesHTTPAgentResponses/stop_with_invalid_JSON$' -count=1 -v 2>&1)" || {
+	code=$?; printf 'expected: structured LLMInvalidJSONError\nactual: %s\nfailed stage: coder\nerror type: tool_error\n' "${output_mcp}" >&2; exit "${code}";
+}
+output_http="$(cd -- "${server_root}" && env GOCACHE="${cache}" go test ./internal/llm -run 'TestChatCompletionDoesNotRetryNonRetryableResponses/invalid_JSON$' -count=1 -v 2>&1)" || {
+	code=$?; printf 'expected: HTTP success malformed envelope classified invalid JSON\nactual: %s\nfailed stage: llm-client\nerror type: tool_error\n' "${output_http}" >&2; exit "${code}";
+}
+grep -q 'finish_reason=stop result=failed error_type=invalid_json' "${trace}"
+grep -q '^agent=reviewer result=skipped$' "${trace}"
+grep -q -- '=== RUN   TestExecuteRunReturnsStructuredErrorForBrokenLLMResponse' <<<"${output_mcp}"
+grep -q -- '--- PASS: TestExecuteRunReturnsStructuredErrorForBrokenLLMResponse' <<<"${output_mcp}"
+grep -q -- '=== RUN   TestExecuteRunClassifiesHTTPAgentResponses/stop_with_invalid_JSON' <<<"${output_mcp}"
+grep -q -- '--- PASS: TestExecuteRunClassifiesHTTPAgentResponses/stop_with_invalid_JSON' <<<"${output_mcp}"
+grep -q -- '=== RUN   TestChatCompletionDoesNotRetryNonRetryableResponses/invalid_JSON' <<<"${output_http}"
+grep -q -- '--- PASS: TestChatCompletionDoesNotRetryNonRetryableResponses/invalid_JSON' <<<"${output_http}"
+printf '%s\n%s\n' "${output_mcp}" "${output_http}"
+printf '%-30s %s\n' 'E2E-08 invalid-json' 'PASS'

@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+e2e_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+server_root="$(cd -- "${e2e_root}/.." && pwd)"
+cache="${TMPDIR:-/tmp}/multi-agent-coder-e2e-go-cache"
+trace="${e2e_root}/testdata/scenarios/e2e-05-token-limit/trace.txt"
+mkdir -p -- "${cache}"
+output="$(cd -- "${server_root}" && env GOCACHE="${cache}" go test ./internal/mcp -run 'TestExecuteRunClassifiesHTTPAgentResponses/length_with_truncated_JSON$' -count=1 -v 2>&1)" || {
+	code=$?; printf 'expected: LLMTruncatedError\nactual: %s\nfailed stage: coder\nerror type: tool_error\n' "${output}" >&2; exit "${code}";
+}
+grep -q 'finish_reason=length result=failed error_type=token_limit' "${trace}"
+grep -q '^agent=reviewer result=skipped$' "${trace}"
+grep -q -- '=== RUN   TestExecuteRunClassifiesHTTPAgentResponses/length_with_truncated_JSON' <<<"${output}"
+grep -q -- '--- PASS: TestExecuteRunClassifiesHTTPAgentResponses/length_with_truncated_JSON' <<<"${output}"
+printf '%s\n' "${output}"
+printf '%-30s %s\n' 'E2E-05 token-limit' 'PASS'

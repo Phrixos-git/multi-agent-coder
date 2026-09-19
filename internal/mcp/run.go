@@ -74,9 +74,18 @@ func registerRunTool(server *sdkmcp.Server, runner agentRunner, reader fileReade
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, input RunInput) (*sdkmcp.CallToolResult, RunOutput, error) {
 		started, requestID := time.Now(), newRequestID()
 		output := executeRun(ctx, runner, reader, input)
+		errorType := ""
+		if output.Error != nil {
+			errorType = output.Error.Kind
+		}
+		backend := output.Backend
+		if backend == "" {
+			backend = "direct"
+		}
 		logger.InfoContext(ctx, "MCP tool request completed",
-			"role", input.Role, "request_id", requestID,
-			"duration", time.Since(started), "status", output.Status)
+			"role", input.Role, "agent", input.Role, "request_id", requestID,
+			"backend", backend, "duration", time.Since(started),
+			"status", output.Status, "result", output.Status, "error_type", errorType)
 		return nil, output, nil
 	})
 }
@@ -132,14 +141,14 @@ func parseRunOutput(raw string, expectedRole agent.Role) (RunOutput, error) {
 	decoder.DisallowUnknownFields()
 	var output RunOutput
 	if err := decoder.Decode(&output); err != nil {
-		return RunOutput{}, &llm.Error{Kind: llm.ErrorResponse, Err: fmt.Errorf("decode agent JSON: %w", err)}
+		return RunOutput{}, &llm.Error{Kind: llm.ErrorInvalidJSON, Err: fmt.Errorf("decode agent JSON: %w", err)}
 	}
 	var extra any
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		if err == nil {
 			err = errors.New("multiple JSON values")
 		}
-		return RunOutput{}, &llm.Error{Kind: llm.ErrorResponse, Err: fmt.Errorf("validate agent JSON: %w", err)}
+		return RunOutput{}, &llm.Error{Kind: llm.ErrorInvalidJSON, Err: fmt.Errorf("validate agent JSON: %w", err)}
 	}
 	if output.Status != "success" && output.Status != "needs_input" && output.Status != "error" {
 		return RunOutput{}, responseValidationError("invalid status %q", output.Status)

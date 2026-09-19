@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+e2e_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+server_root="$(cd -- "${e2e_root}/.." && pwd)"
+cache="${TMPDIR:-/tmp}/multi-agent-coder-e2e-go-cache"
+trace="${e2e_root}/testdata/scenarios/e2e-06-timeout/trace.txt"
+mkdir -p -- "${cache}"
+output="$(cd -- "${server_root}" && env GOCACHE="${cache}" go test ./internal/llm -run '^TestChatCompletionRetriesTimeoutOnce$' -count=1 -v 2>&1)" || {
+	code=$?; printf 'expected: LLMTimeoutError after bounded retries\nactual: %s\nfailed stage: coder\nerror type: tool_error\n' "${output}" >&2; exit "${code}";
+}
+grep -q 'result=failed error_type=timeout' "${trace}"
+grep -q '^agent=reviewer result=skipped$' "${trace}"
+grep -q '^agent=fixer result=skipped$' "${trace}"
+grep -q '^agent=tester result=skipped$' "${trace}"
+grep -q -- '=== RUN   TestChatCompletionRetriesTimeoutOnce' <<<"${output}"
+grep -q -- '--- PASS: TestChatCompletionRetriesTimeoutOnce' <<<"${output}"
+printf '%s\n' "${output}"
+printf '%-30s %s\n' 'E2E-06 timeout' 'PASS'

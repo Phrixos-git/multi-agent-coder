@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+repository_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+e2e_cache="${TMPDIR:-/tmp}/multi-agent-coder-e2e-go-cache"
+mkdir -p -- "${e2e_cache}"
+
+if output="$(cd -- "${repository_root}" && env GOCACHE="${e2e_cache}" go test ./... 2>&1)"; then
+	printf '%s\n' "${output}"
+	printf '%-30s %s\n' 'E2E-01 normal' 'PASS'
+	return_code=0
+else
+	return_code=$?
+	printf '%s\n' "${output}" >&2
+	printf 'expected: Calculator baseline and Average tests pass\n' >&2
+	printf 'actual: go test exited with code %d\n' "${return_code}" >&2
+	printf 'failed stage: final-test\nerror type: test_failure\n' >&2
+	printf '%-30s %s\n' 'E2E-01 normal' 'FAIL' >&2
+fi
+
+exit "${return_code}"

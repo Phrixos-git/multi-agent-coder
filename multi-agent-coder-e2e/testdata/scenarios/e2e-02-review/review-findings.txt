@@ -1,0 +1,5 @@
+agent=coder result=success
+agent=reviewer result=success error_type=review_failure
+finding=HIGH NaN inputs are not rejected and propagate NaN
+finding=HIGH positive and negative infinity inputs are not rejected and propagate Inf
+agent=fixer result=skipped

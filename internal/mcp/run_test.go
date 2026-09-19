@@ -71,7 +71,7 @@ func TestExecuteRunSupportsAllRoles(t *testing.T) {
 
 func TestExecuteRunReturnsStructuredErrorForBrokenLLMResponse(t *testing.T) {
 	output := executeRun(context.Background(), staticRunner{response: "not JSON"}, noFilesReader{}, RunInput{Role: "reviewer", Task: "review"})
-	if output.Status != "error" || output.Error == nil || output.Error.Kind != "LLMResponseError" {
+	if output.Status != "error" || output.Error == nil || output.Error.Kind != "LLMInvalidJSONError" {
 		t.Fatalf("output = %#v", output)
 	}
 }
@@ -108,7 +108,7 @@ func TestExecuteRunClassifiesHTTPAgentResponses(t *testing.T) {
 			wantStatus:   "success",
 		},
 		{name: "length with truncated JSON", content: `{"status":`, finishReason: "length", wantStatus: "error", wantError: "LLMTruncatedError"},
-		{name: "stop with invalid JSON", content: `{"status":`, finishReason: "stop", wantStatus: "error", wantError: "LLMResponseError"},
+		{name: "stop with invalid JSON", content: `{"status":`, finishReason: "stop", wantStatus: "error", wantError: "LLMInvalidJSONError"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -122,7 +122,7 @@ func TestExecuteRunClassifiesHTTPAgentResponses(t *testing.T) {
 			}))
 			defer server.Close()
 
-			client := llm.NewClient(config.Config{LLMBaseURL: server.URL, LLMModel: "test", LLMTimeout: time.Second, LLMMaxTokens: 1})
+			client := llm.NewClient(config.Config{LLMBaseURL: server.URL, LLMModel: "test", LLMTimeout: time.Second, LLMMaxTokens: 1, CoderMaxTokens: 1})
 			runner, err := agent.NewRunner(client)
 			if err != nil {
 				t.Fatal(err)

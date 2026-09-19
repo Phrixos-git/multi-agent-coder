@@ -791,6 +791,10 @@ MAC_LLM_BASE_URL
 MAC_LLM_MODEL
 MAC_LLM_TIMEOUT
 MAC_LLM_MAX_TOKENS
+MAC_CODER_MAX_TOKENS
+MAC_REVIEWER_MAX_TOKENS
+MAC_TESTER_MAX_TOKENS
+MAC_FIXER_MAX_TOKENS
 MAC_LLM_REASONING_EFFORT
 MAC_LLM_TEMPERATURE
 MAC_REPOSITORY_ROOT
@@ -802,19 +806,23 @@ Default：
 ```text
 MAC_LLM_BASE_URL=http://127.0.0.1:8080
 MAC_LLM_TIMEOUT=180s
-MAC_LLM_MAX_TOKENS=1024
+MAC_LLM_MAX_TOKENS=4096
+MAC_CODER_MAX_TOKENS=4096
+MAC_REVIEWER_MAX_TOKENS=1536
+MAC_TESTER_MAX_TOKENS=1536
+MAC_FIXER_MAX_TOKENS=4096
 MAC_LLM_REASONING_EFFORT=none
 MAC_LLM_TEMPERATURE=0.2
 MAC_LOG_LEVEL=info
 ```
 
-Agent実行時の`max_tokens`はRole別に以下を使用する。
+Agent実行時の`max_tokens`はRole別の環境変数から取得する。
 
 ```text
-Coder:    4096
-Reviewer: 1536
-Tester:   1536
-Fixer:    4096
+Coder:    MAC_CODER_MAX_TOKENS
+Reviewer: MAC_REVIEWER_MAX_TOKENS
+Tester:   MAC_TESTER_MAX_TOKENS
+Fixer:    MAC_FIXER_MAX_TOKENS
 ```
 
 Roleを指定しない低レベル呼び出しでは`MAC_LLM_MAX_TOKENS`を使用する。
@@ -847,6 +855,10 @@ status
 ```
 
 Prompt全文およびソースコード全文はDefaultではログへ記録しない。
+
+CodexからSTDIO Serverを起動する際は、`scripts/run-mcp-server` を利用してstderrを日次ログへ保存できる。ラッパーはstderrを親プロセスにも転送し、stdoutには一切出力しない。既定の保存先はRepository Root内の `logs/` とし、`MAC_LOG_DIR` で変更可能とする。
+
+Pi backendのtimeoutは、呼び出し元のMCP Tool timeoutより短く設定する。これにより、Piプロセス終了後の差分収集とworktree cleanupを完了し、`PiTimeoutError`を構造化レスポンスとして返す時間を確保する。
 
 ---
 
@@ -924,6 +936,7 @@ WorkspaceError
 LLMConnectionError
 LLMTimeoutError
 LLMResponseError
+LLMInvalidJSONError
 LLMTruncatedError
 InvalidRoleError
 PromptError

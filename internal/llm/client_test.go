@@ -73,16 +73,13 @@ func TestChatCompletionRoleOptionsAndJSONResponseFormat(t *testing.T) {
 		maxTokens int
 		timeout   time.Duration
 	}{
-		{role: "coder", maxTokens: 4096, timeout: 300 * time.Second},
-		{role: "reviewer", maxTokens: 1536, timeout: 180 * time.Second},
-		{role: "tester", maxTokens: 1536, timeout: 180 * time.Second},
-		{role: "fixer", maxTokens: 4096, timeout: 300 * time.Second},
+		{role: "coder", maxTokens: 8192, timeout: 300 * time.Second},
+		{role: "reviewer", maxTokens: 4096, timeout: 180 * time.Second},
+		{role: "tester", maxTokens: 3072, timeout: 180 * time.Second},
+		{role: "fixer", maxTokens: 8192, timeout: 300 * time.Second},
 	}
 	for _, test := range tests {
 		t.Run(test.role, func(t *testing.T) {
-			if optionsByRole[test.role].timeout != test.timeout {
-				t.Errorf("timeout = %s, want %s", optionsByRole[test.role].timeout, test.timeout)
-			}
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				var request ChatCompletionRequest
 				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
@@ -95,7 +92,11 @@ func TestChatCompletionRoleOptionsAndJSONResponseFormat(t *testing.T) {
 			}))
 			defer server.Close()
 
-			if _, err := newTestClient(server.URL, time.Second).ChatCompletion(context.Background(), nil, test.role); err != nil {
+			client := newTestClient(server.URL, time.Second)
+			if client.optionsByRole[test.role].timeout != test.timeout {
+				t.Errorf("timeout = %s, want %s", client.optionsByRole[test.role].timeout, test.timeout)
+			}
+			if _, err := client.ChatCompletion(context.Background(), nil, test.role); err != nil {
 				t.Fatalf("ChatCompletion() error = %v", err)
 			}
 		})
@@ -117,15 +118,16 @@ func TestChatCompletionLengthReturnsTruncatedError(t *testing.T) {
 
 func TestChatCompletionDoesNotRetryNonRetryableResponses(t *testing.T) {
 	tests := []struct {
-		name   string
-		status int
-		body   string
+		name     string
+		status   int
+		body     string
+		wantKind ErrorKind
 	}{
-		{name: "bad request", status: http.StatusBadRequest, body: `{"error":"context length exceeded"}`},
-		{name: "unauthorized", status: http.StatusUnauthorized, body: `{}`},
-		{name: "not found", status: http.StatusNotFound, body: `{}`},
-		{name: "invalid JSON", status: http.StatusOK, body: `{`},
-		{name: "missing choices", status: http.StatusOK, body: `{}`},
+		{name: "bad request", status: http.StatusBadRequest, body: `{"error":"context length exceeded"}`, wantKind: ErrorResponse},
+		{name: "unauthorized", status: http.StatusUnauthorized, body: `{}`, wantKind: ErrorResponse},
+		{name: "not found", status: http.StatusNotFound, body: `{}`, wantKind: ErrorResponse},
+		{name: "invalid JSON", status: http.StatusOK, body: `{`, wantKind: ErrorInvalidJSON},
+		{name: "missing choices", status: http.StatusOK, body: `{}`, wantKind: ErrorResponse},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -139,7 +141,7 @@ func TestChatCompletionDoesNotRetryNonRetryableResponses(t *testing.T) {
 
 			_, err := newTestClient(server.URL, time.Second).ChatCompletion(context.Background(), nil)
 			var llmErr *Error
-			if !errors.As(err, &llmErr) || llmErr.Kind != ErrorResponse || requests.Load() != 1 {
+			if !errors.As(err, &llmErr) || llmErr.Kind != test.wantKind || requests.Load() != 1 {
 				t.Fatalf("error = %v, requests = %d", err, requests.Load())
 			}
 		})
@@ -204,6 +206,10 @@ func newTestClient(baseURL string, timeout time.Duration) *Client {
 		LLMModel:           "qwen-test",
 		LLMTimeout:         timeout,
 		LLMMaxTokens:       512,
+		CoderMaxTokens:     8192,
+		ReviewerMaxTokens:  4096,
+		TesterMaxTokens:    3072,
+		FixerMaxTokens:     8192,
 		LLMReasoningEffort: "none",
 		LLMTemperature:     0.2,
 	})

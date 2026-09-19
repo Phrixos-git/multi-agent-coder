@@ -1,0 +1,4 @@
+request_id=e2e-06 task_id=e2e-06 agent=coder backend=direct model=mock start_time=fixed end_time=fixed duration=10ms max_tokens=4096 finish_reason=none result=failed error_type=timeout
+agent=reviewer result=skipped
+agent=fixer result=skipped
+agent=tester result=skipped

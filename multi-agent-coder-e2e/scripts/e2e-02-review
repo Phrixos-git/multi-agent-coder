@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+result="${root}/testdata/scenarios/e2e-02-review/review-findings.txt"
+grep -q '^agent=coder result=success$' "${result}"
+grep -q '^agent=reviewer result=success error_type=review_failure$' "${result}"
+grep -q 'NaN inputs are not rejected' "${result}"
+grep -q 'positive and negative infinity inputs are not rejected' "${result}"
+grep -q '^agent=fixer result=skipped$' "${result}"
+printf '%-30s %s\n' 'E2E-02 reviewer-detect' 'PASS'

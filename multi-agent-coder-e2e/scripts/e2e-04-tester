@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+cache="${TMPDIR:-/tmp}/multi-agent-coder-e2e-go-cache"
+mkdir -p -- "${cache}"
+set +e
+output="$(cd -- "${root}" && env GOCACHE="${cache}" go test -v ./testdata/scenarios/e2e-04-tester 2>&1)"
+code=$?
+set -e
+fail_lines="$(grep -E '^--- FAIL:' <<<"${output}" || true)"
+fail_count="$(grep -cE '^--- FAIL:' <<<"${output}" || true)"
+if [[ ${code} -eq 0 || ${fail_count} -ne 1 ]] || ! grep -q '^--- FAIL: TestDivideByZeroContract' <<<"${fail_lines}" || ! grep -q '^--- PASS: TestDivideNormal' <<<"${output}" || ! grep -q 'error = nil, want ErrDivisionByZero' <<<"${output}"; then
+	printf 'expected: non-zero go test exit with Divide compatibility failure\n' >&2
+	printf 'actual: exit=%d fail_count=%d output=%s\n' "${code}" "${fail_count}" "${output}" >&2
+	printf 'failed stage: tester\nerror type: test_failure\n' >&2
+	exit 1
+fi
+printf 'tester exit_code=%d error_type=test_failure\n' "${code}"
+printf 'tester output=%s\n' "${output}"
+printf '%-30s %s\n' 'E2E-04 tester-failure' 'PASS'

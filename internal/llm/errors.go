@@ -6,10 +6,11 @@ import "fmt"
 type ErrorKind string
 
 const (
-	ErrorConnection ErrorKind = "LLMConnectionError"
-	ErrorTimeout    ErrorKind = "LLMTimeoutError"
-	ErrorResponse   ErrorKind = "LLMResponseError"
-	ErrorTruncated  ErrorKind = "LLMTruncatedError"
+	ErrorConnection  ErrorKind = "LLMConnectionError"
+	ErrorTimeout     ErrorKind = "LLMTimeoutError"
+	ErrorResponse    ErrorKind = "LLMResponseError"
+	ErrorInvalidJSON ErrorKind = "LLMInvalidJSONError"
+	ErrorTruncated   ErrorKind = "LLMTruncatedError"
 )
 
 // Error is a classified LLM client error. StatusCode is set for HTTP errors.
