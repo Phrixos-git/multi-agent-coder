@@ -9,7 +9,7 @@
 # Test and coverage artifacts
 /coverage/
 /test-results/
-/test_projekt/
+/test_project/
 coverage.*
 *.coverprofile
 *.prof
