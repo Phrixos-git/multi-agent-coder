@@ -25,14 +25,7 @@ func NewRunner(client ChatCompleter) (*Runner, error) {
 	if err != nil {
 		return nil, err
 	}
-	return NewRunnerWithBackends(direct, nil), nil
-}
-
-func NewRunnerWithBackends(direct Backend, coder Backend) *Runner {
-	if coder == nil {
-		coder = direct
-	}
-	return NewRunnerWithRoleBackends(map[Role]Backend{RoleCoder: coder, RoleReviewer: direct, RoleTester: direct, RoleFixer: direct})
+	return NewRunnerWithRoleBackends(map[Role]Backend{RoleCoder: direct, RoleReviewer: direct, RoleTester: direct, RoleFixer: direct}), nil
 }
 
 // NewRunnerWithRoleBackends selects one backend for each role at construction.
@@ -52,12 +45,4 @@ func (r *Runner) Run(ctx context.Context, input PromptInput) (string, error) {
 		return "", fmt.Errorf("run %s agent: backend is not configured", input.Role)
 	}
 	return b.Run(ctx, input)
-}
-
-func (r *Runner) NeedsInputFiles(role Role) bool {
-	b := r.backends[role]
-	if consumer, ok := b.(suppliedFileConsumer); ok {
-		return consumer.UsesSuppliedFiles()
-	}
-	return true
 }

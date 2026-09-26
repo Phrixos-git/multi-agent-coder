@@ -5,26 +5,26 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/arietis/multi-agent-coder/internal/agent"
 	"github.com/arietis/multi-agent-coder/internal/config"
 	"github.com/arietis/multi-agent-coder/internal/llm"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-func TestLocalAgentRunRoutesDirectRoles(t *testing.T) {
+func TestLocalAgentRunRoutesAllRolesDirectly(t *testing.T) {
 	for _, tc := range []struct {
 		role, target, model string
 		maxTokens           int
+		timeout             time.Duration
 	}{
-		{"fixer", "coding", "coding-test", 4096},
-		{"reviewer", "main", "main-test", 4096},
-		{"tester", "main", "main-test", 3072},
+		{"coder", "coding", "coding-test", 4096, 2 * time.Second},
+		{"fixer", "coding", "coding-test", 4096, 2 * time.Second},
+		{"reviewer", "main", "main-test", 4096, time.Second},
+		{"tester", "main", "main-test", 3072, time.Second},
 	} {
 		t.Run(tc.role, func(t *testing.T) {
 			var mainCalls, codingCalls atomic.Int32
@@ -35,12 +35,12 @@ func TestLocalAgentRunRoutesDirectRoles(t *testing.T) {
 					if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 						t.Error(err)
 					}
-					if name != tc.target || request.Model != tc.model || request.MaxTokens != tc.maxTokens {
+					if name != tc.target || request.Model != tc.model || request.MaxTokens != tc.maxTokens || request.ReasoningEffort != "none" || request.Temperature != 0.2 {
 						t.Errorf("%s received role %s request: %+v", name, tc.role, request)
 					}
-					if tc.role == "fixer" {
+					if tc.role == "coder" || tc.role == "fixer" {
 						if request.ResponseFormat.Type != "json_schema" || request.ResponseFormat.JSONSchema == nil {
-							t.Errorf("fixer response format = %+v", request.ResponseFormat)
+							t.Errorf("%s response format = %+v", tc.role, request.ResponseFormat)
 						}
 					} else if request.ResponseFormat.Type != "json_object" {
 						t.Errorf("%s response format = %+v", tc.role, request.ResponseFormat)
@@ -58,11 +58,15 @@ func TestLocalAgentRunRoutesDirectRoles(t *testing.T) {
 			cfg := config.Config{
 				MainLLM:      config.LLMConfig{BaseURL: main.URL, Model: "main-test", Timeout: time.Second},
 				CodingLLM:    config.LLMConfig{BaseURL: coding.URL, Model: "coding-test", Timeout: 2 * time.Second},
-				LLMMaxTokens: 1024, ReviewerMaxTokens: 4096, TesterMaxTokens: 3072, FixerMaxTokens: 4096,
-				RepositoryRoot: t.TempDir(),
+				LLMMaxTokens: 1024, CoderMaxTokens: 4096, ReviewerMaxTokens: 4096, TesterMaxTokens: 3072, FixerMaxTokens: 4096,
+				LLMReasoningEffort: "none", LLMTemperature: 0.2, RepositoryRoot: t.TempDir(),
+			}
+			resolved, resolvedMaxTokens := directConfigForRole(cfg, agent.Role(tc.role))
+			if resolved.Model != tc.model || resolved.Timeout != tc.timeout || resolvedMaxTokens != tc.maxTokens {
+				t.Fatalf("resolved config = %+v max_tokens=%d", resolved, resolvedMaxTokens)
 			}
 			out := runMCPRole(t, cfg, tc.role)
-			if out["status"] != "success" {
+			if out["status"] != "success" || out["backend"] != "direct" {
 				t.Fatalf("output = %#v", out)
 			}
 			wantMain, wantCoding := int32(1), int32(0)
@@ -73,39 +77,6 @@ func TestLocalAgentRunRoutesDirectRoles(t *testing.T) {
 				t.Fatalf("main calls=%d coding calls=%d", mainCalls.Load(), codingCalls.Load())
 			}
 		})
-	}
-}
-
-func TestLocalAgentRunCoderUsesPiWithoutDirectRequests(t *testing.T) {
-	var mainCalls, codingCalls atomic.Int32
-	main := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { mainCalls.Add(1) }))
-	defer main.Close()
-	coding := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { codingCalls.Add(1) }))
-	defer coding.Close()
-	repo := t.TempDir()
-	for _, args := range [][]string{{"init"}, {"config", "user.email", "test@example.invalid"}, {"config", "user.name", "Test"}} {
-		command := exec.Command("git", append([]string{"-C", repo}, args...)...)
-		if out, err := command.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v: %s", args, err, out)
-		}
-	}
-	if err := os.WriteFile(filepath.Join(repo, "source.go"), []byte("package sample\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	for _, args := range [][]string{{"add", "source.go"}, {"commit", "-m", "fixture"}} {
-		command := exec.Command("git", append([]string{"-C", repo}, args...)...)
-		if out, err := command.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v: %s", args, err, out)
-		}
-	}
-	cfg := config.Config{
-		MainLLM:        config.LLMConfig{BaseURL: main.URL, Timeout: time.Second},
-		CodingLLM:      config.LLMConfig{BaseURL: coding.URL, Timeout: time.Second},
-		RepositoryRoot: repo, CoderBackend: "pi", PiExecutable: filepath.Join(repo, "missing-pi"), PiTimeout: time.Second,
-	}
-	out := runMCPRole(t, cfg, "coder")
-	if out["backend"] != "pi" || out["status"] != "error" || mainCalls.Load() != 0 || codingCalls.Load() != 0 {
-		t.Fatalf("output=%#v main=%d coding=%d", out, mainCalls.Load(), codingCalls.Load())
 	}
 }
 

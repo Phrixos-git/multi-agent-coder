@@ -70,7 +70,7 @@ type fileReader interface {
 func registerRunTool(server *sdkmcp.Server, runner agentRunner, reader fileReader, logger *slog.Logger) {
 	sdkmcp.AddTool(server, &sdkmcp.Tool{
 		Name:        "local_agent_run",
-		Description: "Run an independent coder, reviewer, tester, or fixer. Direct mode is read-only; optional Pi coder mode edits only an isolated temporary Git worktree.",
+		Description: "Run an independent coder, reviewer, tester, or fixer using the configured Direct LLM backend. The result is a proposal; Codex applies artifacts and runs tests.",
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, input RunInput) (*sdkmcp.CallToolResult, RunOutput, error) {
 		started, requestID := time.Now(), newRequestID()
 		output := executeRun(ctx, runner, reader, input)
@@ -96,24 +96,7 @@ func executeRun(ctx context.Context, runner agentRunner, reader fileReader, inpu
 		return failedOutput(input.Role, err)
 	}
 	files := make([]agent.File, 0, len(input.Files))
-	needsFiles := true
-	if policy, ok := runner.(interface{ NeedsInputFiles(agent.Role) bool }); ok {
-		needsFiles = policy.NeedsInputFiles(role)
-	}
-	if !needsFiles {
-		for _, path := range input.Files {
-			if validator, ok := reader.(interface{ ValidatePath(string) error }); ok {
-				if err := validator.ValidatePath(path); err != nil {
-					return failedOutput(input.Role, err)
-				}
-			}
-			files = append(files, agent.File{Path: path})
-		}
-	}
 	for _, path := range input.Files {
-		if !needsFiles {
-			break
-		}
 		content, err := reader.ReadFile(path)
 		if err != nil {
 			return failedOutput(input.Role, err)
@@ -199,12 +182,6 @@ func errorKind(err error) string {
 	case errors.As(err, &categorized):
 		return categorized.ErrorKind()
 	default:
-		message := err.Error()
-		for _, kind := range []string{"PiExecutableNotFound", "PiStartupError", "PiRPCProtocolError", "PiTimeoutError", "PiCanceledError", "PiAbnormalExit", "GitRepositoryError", "WorktreeCreateError", "DiffCollectionError", "CleanupError"} {
-			if strings.Contains(message, kind) {
-				return kind
-			}
-		}
 		return "InternalError"
 	}
 }

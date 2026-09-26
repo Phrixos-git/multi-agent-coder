@@ -14,6 +14,7 @@ import (
 
 const (
 	defaultLLMBaseURL         = "http://127.0.0.1:8080"
+	defaultLLMModel           = "qwen3.8-27b"
 	defaultCodingLLMBaseURL   = "http://127.0.0.1:18082"
 	defaultCodingLLMModel     = "qwen-coder"
 	defaultLLMTimeout         = 180 * time.Second
@@ -25,9 +26,6 @@ const (
 	defaultLLMReasoningEffort = "none"
 	defaultLLMTemperature     = 0.2
 	defaultLogLevel           = "info"
-	defaultCoderBackend       = "direct"
-	defaultPiExecutable       = "pi"
-	defaultPiTimeout          = 300 * time.Second
 )
 
 // LLMConfig identifies one OpenAI-compatible local model endpoint.
@@ -50,12 +48,6 @@ type Config struct {
 	LLMTemperature     float64
 	RepositoryRoot     string
 	LogLevel           string
-	CoderBackend       string
-	PiExecutable       string
-	PiProvider         string
-	PiModel            string
-	PiRPCArgs          []string
-	PiTimeout          time.Duration
 }
 
 // Load reads and validates configuration from the environment.
@@ -101,15 +93,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	piTimeout, err := parseDuration("MAC_PI_TIMEOUT", defaultPiTimeout)
-	if err != nil {
-		return Config{}, err
-	}
-
 	cfg := Config{
 		MainLLM: LLMConfig{
 			BaseURL: envOrDefault("MAC_LLM_BASE_URL", defaultLLMBaseURL),
-			Model:   strings.TrimSpace(os.Getenv("MAC_LLM_MODEL")), Timeout: timeout,
+			Model:   envOrDefault("MAC_LLM_MODEL", defaultLLMModel), Timeout: timeout,
 		},
 		CodingLLM: LLMConfig{
 			BaseURL: envOrDefault("MAC_CODING_LLM_BASE_URL", defaultCodingLLMBaseURL),
@@ -124,12 +111,6 @@ func Load() (Config, error) {
 		LLMTemperature:     temperature,
 		RepositoryRoot:     repositoryRoot,
 		LogLevel:           strings.ToLower(envOrDefault("MAC_LOG_LEVEL", defaultLogLevel)),
-		CoderBackend:       strings.ToLower(envOrDefault("MAC_CODER_BACKEND", defaultCoderBackend)),
-		PiExecutable:       envOrDefault("MAC_PI_EXECUTABLE", defaultPiExecutable),
-		PiProvider:         strings.TrimSpace(os.Getenv("MAC_PI_PROVIDER")),
-		PiModel:            strings.TrimSpace(os.Getenv("MAC_PI_MODEL")),
-		PiRPCArgs:          strings.Fields(os.Getenv("MAC_PI_RPC_ARGS")),
-		PiTimeout:          piTimeout,
 	}
 	if err := cfg.validate(); err != nil {
 		return Config{}, err
@@ -187,15 +168,6 @@ func (c *Config) validate() error {
 
 	if _, ok := logLevels[c.LogLevel]; !ok {
 		return fmt.Errorf("ConfigError: MAC_LOG_LEVEL must be debug, info, warn, or error")
-	}
-	if c.CoderBackend != "direct" && c.CoderBackend != "pi" {
-		return fmt.Errorf("ConfigError: MAC_CODER_BACKEND must be direct or pi")
-	}
-	if strings.TrimSpace(c.PiExecutable) == "" {
-		return fmt.Errorf("ConfigError: MAC_PI_EXECUTABLE must not be empty")
-	}
-	if c.PiTimeout <= 0 {
-		return fmt.Errorf("ConfigError: MAC_PI_TIMEOUT must be greater than zero")
 	}
 	return nil
 }

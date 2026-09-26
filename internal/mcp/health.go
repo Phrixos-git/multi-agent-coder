@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"os/exec"
 	"strings"
 	"syscall"
 	"time"
@@ -22,11 +21,10 @@ type healthInput struct{}
 
 // HealthOutput is the structured result of local_agent_health.
 type HealthOutput struct {
-	Status    string        `json:"status" jsonschema:"MCP server status"`
-	LLM       string        `json:"llm" jsonschema:"legacy main LLM status"`
-	MainLLM   LLMHealth     `json:"main_llm" jsonschema:"main LLM connectivity"`
-	CodingLLM LLMHealth     `json:"coding_llm" jsonschema:"coding LLM connectivity"`
-	Pi        BackendHealth `json:"pi" jsonschema:"Pi executable status"`
+	Status    string    `json:"status" jsonschema:"MCP server status"`
+	LLM       string    `json:"llm" jsonschema:"legacy main LLM status"`
+	MainLLM   LLMHealth `json:"main_llm" jsonschema:"main LLM connectivity"`
+	CodingLLM LLMHealth `json:"coding_llm" jsonschema:"coding LLM connectivity"`
 }
 
 type LLMHealth struct {
@@ -35,14 +33,10 @@ type LLMHealth struct {
 	Model   string `json:"model"`
 }
 
-type BackendHealth struct {
-	Status string `json:"status"`
-}
-
 func registerHealthTool(server *sdkmcp.Server, cfg config.Config, logger *slog.Logger) {
 	sdkmcp.AddTool(server, &sdkmcp.Tool{
 		Name:        "local_agent_health",
-		Description: "Report Main LLM, Coding LLM, and Pi health independently.",
+		Description: "Report Main LLM and Coding LLM health independently.",
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, _ healthInput) (*sdkmcp.CallToolResult, HealthOutput, error) {
 		started := time.Now()
 		requestID := newRequestID()
@@ -50,19 +44,10 @@ func registerHealthTool(server *sdkmcp.Server, cfg config.Config, logger *slog.L
 			Status:    "ok",
 			MainLLM:   probeLLM(ctx, cfg.MainLLM),
 			CodingLLM: probeLLM(ctx, cfg.CodingLLM),
-			Pi:        BackendHealth{Status: "not_configured"},
 		}
 		output.LLM = output.MainLLM.Status
 		if output.MainLLM.Status != "available" || output.CodingLLM.Status != "available" {
 			output.Status = "degraded"
-		}
-		if cfg.CoderBackend == "pi" {
-			if _, err := exec.LookPath(cfg.PiExecutable); err != nil {
-				output.Status = "degraded"
-				output.Pi.Status = "not_found"
-			} else {
-				output.Pi.Status = "available"
-			}
 		}
 		logger.InfoContext(ctx, "MCP tool request completed",
 			"role", "health",

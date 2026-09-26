@@ -1,10 +1,8 @@
 package mcp
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -19,7 +17,7 @@ import (
 )
 
 // TestLiveRoleRouting exercises the MCP tools against running local models.
-// Run explicitly with MAC_LIVE_ROLE_E2E=1 and a working Pi provider config.
+// Run explicitly with MAC_LIVE_ROLE_E2E=1 and both local LLM servers available.
 func TestLiveRoleRouting(t *testing.T) {
 	if os.Getenv("MAC_LIVE_ROLE_E2E") != "1" {
 		t.Skip("set MAC_LIVE_ROLE_E2E=1 to use live local models")
@@ -41,64 +39,62 @@ func TestLiveRoleRouting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load live E2E configuration: %v", err)
 	}
-	if base.PiProvider == "" || base.PiModel == "" {
-		t.Fatal("live role routing requires MAC_PI_PROVIDER and MAC_PI_MODEL matching a provider/model in Pi's models.json")
-	}
 	base.RepositoryRoot = repo
-	base.CoderBackend = "pi"
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 	base.MainLLM.Model = liveModelID(t, ctx, base.MainLLM)
 	health := liveCallTool(t, ctx, base, "local_agent_health", nil)
-	if health["status"] != "ok" || health["main_llm"].(map[string]any)["status"] != "available" || health["coding_llm"].(map[string]any)["status"] != "available" || health["pi"].(map[string]any)["status"] != "available" {
+	if health["status"] != "ok" || health["main_llm"].(map[string]any)["status"] != "available" || health["coding_llm"].(map[string]any)["status"] != "available" {
 		t.Fatalf("live health = %#v", health)
 	}
-	t.Logf("health: main=%v coding=%v pi=%v", health["main_llm"].(map[string]any)["status"], health["coding_llm"].(map[string]any)["status"], health["pi"].(map[string]any)["status"])
+	t.Logf("health: main=%v coding=%v", health["main_llm"].(map[string]any)["status"], health["coding_llm"].(map[string]any)["status"])
 
 	for _, tc := range []struct{ role, task string }{
+		{"coder", "Correct broken.go so Subtract returns a - b. Return one JSON object with status success, role coder, a short summary, and an artifact containing the complete corrected broken.go. Do not use Markdown outside JSON."},
 		{"reviewer", "Review source.go. It correctly adds two integers. Return a concise JSON review with status success, role reviewer, and no findings."},
-		{"tester", "Suggest one unit test for Add in source.go. Return concise JSON with status success and role tester; do not edit files."},
+		{"tester", "Suggest one concrete unit test for Add in source.go. Put the suggestion in exactly one notes entry. Return JSON with status success and role tester; do not edit files."},
 		{"fixer", "Fix broken.go: Subtract currently adds, but it must return a - b. Return one JSON object with status success, role fixer, a short summary, and an artifact containing the complete corrected broken.go. Do not use Markdown outside JSON."},
 	} {
 		t.Run(tc.role, func(t *testing.T) {
 			cfg := base
-			if tc.role == "fixer" {
+			if tc.role == "coder" || tc.role == "fixer" {
 				cfg.MainLLM.BaseURL = "http://127.0.0.1:1"
 			} else {
 				cfg.CodingLLM.BaseURL = "http://127.0.0.1:1"
 			}
 			file := "source.go"
-			if tc.role == "fixer" {
+			if tc.role == "coder" || tc.role == "fixer" {
 				file = "broken.go"
 			}
 			out := liveCallTool(t, ctx, cfg, "local_agent_run", map[string]any{"role": tc.role, "task": tc.task, "files": []string{file}})
 			if out["status"] != "success" || out["role"] != tc.role || out["backend"] != "direct" {
 				t.Fatalf("live %s output = %#v", tc.role, out)
 			}
-			if tc.role == "fixer" {
+			if tc.role == "coder" || tc.role == "fixer" {
 				artifacts := out["artifacts"].([]any)
 				if len(artifacts) != 1 || artifacts[0].(map[string]any)["path"] != "broken.go" || !contains(artifacts[0].(map[string]any)["content"].(string), "return a - b") {
-					t.Fatalf("fixer artifact = %#v", artifacts)
+					t.Fatalf("%s artifact = %#v", tc.role, artifacts)
+				}
+			} else if tc.role == "reviewer" {
+				if findings := out["findings"].([]any); len(findings) != 0 {
+					t.Fatalf("reviewer findings = %#v", findings)
+				}
+			} else if tc.role == "tester" {
+				notes := out["notes"].([]any)
+				if len(notes) != 1 || strings.TrimSpace(notes[0].(string)) == "" {
+					t.Fatalf("tester notes = %#v", notes)
 				}
 			}
 			t.Logf("%s: success, backend=%v, summary=%v", tc.role, out["backend"], out["summary"])
 		})
 	}
-	t.Run("coder", func(t *testing.T) {
-		cfg := base
-		cfg.MainLLM.BaseURL = "http://127.0.0.1:1"
-		cfg.CodingLLM.BaseURL = "http://127.0.0.1:1"
-		var rpcLogs bytes.Buffer
-		logger := slog.New(slog.NewTextHandler(&rpcLogs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-		out := liveCallToolWithLogger(t, ctx, cfg, "local_agent_run", map[string]any{
-			"role": "coder", "task": "Add exactly one comment line `// E2E marker` immediately above the Add function in source.go. Do not change anything else. Return a short final summary.", "files": []string{"source.go"},
-		}, logger)
-		patch, _ := out["patch"].(string)
-		if out["status"] != "success" || out["backend"] != "pi" || !contains(patch, "+// E2E marker") {
-			t.Fatalf("live coder output = %#v\nPi metadata logs:\n%s", out, rpcLogs.String())
-		}
-		t.Logf("coder: success, backend=%v, summary=%v", out["backend"], out["summary"])
-	})
+	contents, err := os.ReadFile(filepath.Join(repo, "broken.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(string(contents), "return a + b") {
+		t.Fatalf("Direct agents modified the source repository: %s", contents)
+	}
 }
 
 func liveModelID(t *testing.T, ctx context.Context, cfg config.LLMConfig) string {
@@ -155,12 +151,7 @@ func TestLiveModelIDDiscoversModel(t *testing.T) {
 
 func liveCallTool(t *testing.T, ctx context.Context, cfg config.Config, name string, args map[string]any) map[string]any {
 	t.Helper()
-	return liveCallToolWithLogger(t, ctx, cfg, name, args, discardLogger())
-}
-
-func liveCallToolWithLogger(t *testing.T, ctx context.Context, cfg config.Config, name string, args map[string]any, logger *slog.Logger) map[string]any {
-	t.Helper()
-	server, err := NewServer(cfg, logger)
+	server, err := NewServer(cfg, discardLogger())
 	if err != nil {
 		t.Fatal(err)
 	}

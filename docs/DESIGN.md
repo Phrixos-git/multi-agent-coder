@@ -108,10 +108,10 @@ Role別Backend routingはMain LLMとCoding LLMの2つの手動起動済みserver
               │ Role別Backend selection
               ▼
 ┌──────────────────────────┐
-│ coder: Pi -> Coding LLM  │
-│ fixer: Direct -> Coding   │
+│ coder/fixer: Direct       │
+│          -> Coding LLM    │
 │ reviewer/tester: Direct   │
-│                 -> Main   │
+│          -> Main LLM      │
 └──────────────────────────┘
 ```
 
@@ -389,7 +389,7 @@ fixer
 
 動作確認用。
 
-確認対象はMain LLM、Coding LLM、Pi実行ファイルとする。各LLMへ有限timeoutで個別に接続し、接続拒否による停止とHTTP/応答の失敗を区別する。Coding LLMが停止していてもMCP Serverは動作を続ける。
+確認対象はMain LLMとCoding LLMとする。各LLMへ有限timeoutで個別に接続し、接続拒否による停止とHTTP/応答の失敗を区別する。いずれかのLLMが停止していてもMCP Serverは動作を続ける。
 
 レスポンス例：
 
@@ -398,8 +398,7 @@ fixer
   "status": "ok",
   "llm": "available",
   "main_llm": {"status": "available", "base_url": "http://127.0.0.1:8080", "model": "qwen3.8-27b"},
-  "coding_llm": {"status": "available", "base_url": "http://127.0.0.1:18082", "model": "qwen-coder"},
-  "pi": {"status": "available"}
+  "coding_llm": {"status": "available", "base_url": "http://127.0.0.1:18082", "model": "qwen-coder"}
 }
 ```
 
@@ -567,11 +566,10 @@ internal/llm/
 
 LLMリクエストには必ずTimeoutを設定する。
 
-Backend別Default：
+Role別Default：
 
 ```text
-Coder/Pi:         300 seconds
-Fixer/Coding LLM: 180 seconds
+Coder/Fixer/Coding LLM: 180 seconds
 Reviewer/Tester/Main LLM: 180 seconds
 ```
 
@@ -797,6 +795,7 @@ Default：
 
 ```text
 MAC_LLM_BASE_URL=http://127.0.0.1:8080
+MAC_LLM_MODEL=qwen3.8-27b
 MAC_LLM_TIMEOUT=180s
 MAC_CODING_LLM_BASE_URL=http://127.0.0.1:18082
 MAC_CODING_LLM_MODEL=qwen-coder
@@ -822,9 +821,7 @@ Fixer:    MAC_FIXER_MAX_TOKENS
 
 Role固有の値が未指定なら`MAC_LLM_MAX_TOKENS`、それも未指定ならコード内Defaultを使用する。Roleを指定しない低レベル呼び出しでも`MAC_LLM_MAX_TOKENS`を使用する。
 
-Model名は固定しない。
-
-llama-server側で利用するモデルを変更できる設計とする。
+上記のModel名を標準Defaultとし、環境変数でllama-server側のモデルIDに合わせて変更できる。
 
 ---
 
@@ -852,8 +849,6 @@ status
 Prompt全文およびソースコード全文はDefaultではログへ記録しない。
 
 CodexからSTDIO Serverを起動する際は、`scripts/run-mcp-server` を利用してstderrを日次ログへ保存できる。ラッパーはstderrを親プロセスにも転送し、stdoutには一切出力しない。既定の保存先はRepository Root内の `logs/` とし、`MAC_LOG_DIR` で変更可能とする。
-
-Pi backendのtimeoutは、呼び出し元のMCP Tool timeoutより短く設定する。これにより、Piプロセス終了後の差分収集とworktree cleanupを完了し、`PiTimeoutError`を構造化レスポンスとして返す時間を確保する。
 
 ---
 
@@ -979,8 +974,7 @@ MCP
  ↓
 multi-agent-coder
  ↓
-coder → Pi → Coding LLM
-fixer → Direct → Coding LLM
+coder/fixer → Direct → Coding LLM
 reviewer/tester → Direct → Main LLM
 ```
 
@@ -1110,23 +1104,17 @@ E2E
 
 ---
 
-# 31. Optional Pi coder backend
+# 31. Role別Direct backend routing
 
-Version 1のDirect経路を既定として維持しつつ、coderに限り設定でPi Coding Agent RPC backendを選択できる。これはVersion 1の「LLMによる直接編集・Shell実行禁止」を置き換えるものではなく、一時Git worktreeに限定された明示的なopt-in経路である。
+すべてのRoleはOpenAI互換APIを使うDirect LLM backendで処理する。CoderとFixerはCoding LLM、ReviewerとTesterはMain LLMを使用する。
 
 ```text
 local_agent_run
-  ├─ coder + MAC_CODER_BACKEND=pi -> PiBackend
-  ├─ coder + MAC_CODER_BACKEND=direct -> DirectBackend / Main LLM（既存互換）
-  ├─ fixer                          -> DirectBackend / Coding LLM
-  └─ reviewer, tester               -> DirectBackend / Main LLM
+  ├─ coder, fixer    -> DirectBackend / Coding LLM
+  └─ reviewer, tester -> DirectBackend / Main LLM
 ```
 
-PiBackendは実行時のGit `HEAD`から一時branch/worktreeを作り、Piを `--mode rpc --no-session` で起動する。stdin/stdoutはLF区切りJSONL、stderrは診断用として分離し、`agent_settled`を完了イベントとする。Context cancelまたは有限timeout時にはPiプロセスグループを終了する。
-
-変更結果はPiの文章ではなく `git diff --name-only` と `git diff --binary HEAD` を正とする。untracked fileはintent-to-addによりpatchへ含める。差分回収後にworktreeを強制削除し、一時branchも削除する。差分回収が回復不能に失敗した場合は診断を保持した上で専用の強制cleanupを行う。本体working treeの未コミット変更は許容するがPiへ同期しない。
-
-worktreeはOSレベルsandboxではない。Piのインストール、models.json、provider/model、llama.cpp Serverは外部管理とし、Piが見つからない場合はDirectへfallbackしない。
+Coder/FixerはJSON成果物を返し、実ファイルの適用とテスト実行はCodexが担当する。Direct backendはモデルにTool CallやShell/Git権限を与えない。
 
 ---
 
@@ -1165,7 +1153,7 @@ Local LLM
 
 RoleごとにBackendを解決し、System PromptとContextを分離する。Main/Codingの接続先は環境変数で指定し、LLM ClientはRoleによる接続先選択を行わない。
 
-Coding LLMのDirect応答にはAgent JSON schemaを指定する。JSONのdecodeとRole/Statusなどの検証は従来通りMCP層で行う。
+Coder/FixerのCoding LLMへのDirect応答にはAgent JSON schemaを指定する。Reviewer/TesterのMain LLMには従来のJSON object形式を使う。JSONのdecodeとRole/Statusなどの検証は従来通りMCP層で行う。
 
 ローカルLLMは作業者に徹し、
 

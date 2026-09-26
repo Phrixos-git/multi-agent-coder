@@ -132,6 +132,32 @@ func TestChatCompletionDoesNotRetryNonRetryableResponses(t *testing.T) {
 	}
 }
 
+func TestChatCompletionRejectsMultipleJSONValues(t *testing.T) {
+	valid := `{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`
+	for _, test := range []struct {
+		name string
+		body string
+	}{
+		{name: "second JSON value", body: valid + ` {}`},
+		{name: "malformed trailing data", body: valid + ` trailing`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var requests atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				requests.Add(1)
+				_, _ = w.Write([]byte(test.body))
+			}))
+			defer server.Close()
+
+			_, err := newTestClient(server.URL, time.Second).ChatCompletion(context.Background(), nil)
+			var llmErr *Error
+			if !errors.As(err, &llmErr) || llmErr.Kind != ErrorInvalidJSON || requests.Load() != 1 {
+				t.Fatalf("error = %v, requests = %d; want one non-retried LLMInvalidJSONError", err, requests.Load())
+			}
+		})
+	}
+}
+
 func TestChatCompletionRetriesTimeoutOnce(t *testing.T) {
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

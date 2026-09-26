@@ -12,8 +12,6 @@ type Backend interface {
 	Run(context.Context, PromptInput) (string, error)
 }
 
-type suppliedFileConsumer interface{ UsesSuppliedFiles() bool }
-
 // DirectBackend preserves the original direct llama.cpp request path.
 type DirectBackend struct {
 	client  ChatCompleter
@@ -45,5 +43,3 @@ func (b *DirectBackend) Run(ctx context.Context, input PromptInput) (string, err
 	}
 	return response.Choices[0].Message.Content, nil
 }
-
-func (*DirectBackend) UsesSuppliedFiles() bool { return true }

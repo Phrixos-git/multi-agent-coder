@@ -54,16 +54,26 @@ func TestRunnerRejectsResponseWithoutChoices(t *testing.T) {
 	}
 }
 
-func TestRunnerSelectsCoderBackendOnlyForCoder(t *testing.T) {
-	direct, coder := &recordingBackend{}, &recordingBackend{}
-	runner := NewRunnerWithBackends(direct, coder)
-	for _, role := range []Role{RoleCoder, RoleReviewer, RoleTester, RoleFixer} {
-		if _, err := runner.Run(context.Background(), PromptInput{Role: role}); err != nil {
-			t.Fatal(err)
-		}
+func TestNewRunnerRejectsNilClient(t *testing.T) {
+	if runner, err := NewRunner(nil); err == nil || runner != nil {
+		t.Fatalf("NewRunner(nil) = (%v, %v), want nil runner and error", runner, err)
 	}
-	if coder.calls != 1 || direct.calls != 3 {
-		t.Fatalf("coder calls=%d direct calls=%d", coder.calls, direct.calls)
+}
+
+func TestRunnerRejectsUnconfiguredRole(t *testing.T) {
+	runner := NewRunnerWithRoleBackends(map[Role]Backend{RoleCoder: &recordingBackend{}})
+	_, err := runner.Run(context.Background(), PromptInput{Role: RoleReviewer, Task: "review"})
+	if err == nil || !strings.Contains(err.Error(), "backend is not configured") {
+		t.Fatalf("Run() error = %v, want missing backend error", err)
+	}
+}
+
+func TestRunnerPropagatesBackendError(t *testing.T) {
+	wantErr := errors.New("backend unavailable")
+	runner := NewRunnerWithRoleBackends(map[Role]Backend{RoleCoder: errorBackend{err: wantErr}})
+	_, err := runner.Run(context.Background(), PromptInput{Role: RoleCoder, Task: "implement"})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Run() error = %v, want wrapped backend error", err)
 	}
 }
 
@@ -92,6 +102,10 @@ func (c *recordingClient) ChatCompletion(_ context.Context, messages []llm.Messa
 	c.mu.Unlock()
 	return llm.ChatCompletionResponse{Choices: []llm.Choice{{Message: llm.Message{Role: "assistant", Content: `{}`}}}}, nil
 }
+
+type errorBackend struct{ err error }
+
+func (b errorBackend) Run(context.Context, PromptInput) (string, error) { return "", b.err }
 
 func containsMessage(messages []llm.Message, value string) bool {
 	for _, message := range messages {

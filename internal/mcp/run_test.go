@@ -3,6 +3,8 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -15,6 +17,7 @@ import (
 	"github.com/arietis/multi-agent-coder/internal/agent"
 	"github.com/arietis/multi-agent-coder/internal/config"
 	"github.com/arietis/multi-agent-coder/internal/llm"
+	"github.com/arietis/multi-agent-coder/internal/workspace"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -76,20 +79,78 @@ func TestExecuteRunReturnsStructuredErrorForBrokenLLMResponse(t *testing.T) {
 	}
 }
 
-func TestExecuteRunPreservesBackendPartialError(t *testing.T) {
-	raw := `{"status":"error","role":"coder","summary":"Pi failed","artifacts":[],"findings":[],"risks":[],"notes":[],"backend":"pi","patch":"partial","changed_files":["x.go"],"execution_results":[],"warnings":[],"error":{"kind":"PiAbnormalExit","message":"failed"}}`
-	out := executeRun(context.Background(), staticRunner{response: raw}, noFilesReader{}, RunInput{Role: "coder", Task: "task"})
-	if out.Status != "error" || out.Patch != "partial" || out.Error == nil || out.Error.Kind != "PiAbnormalExit" {
-		t.Fatalf("output=%#v", out)
+func TestExecuteRunReturnsStructuredErrorsBeforeCallingRunner(t *testing.T) {
+	t.Run("invalid role", func(t *testing.T) {
+		runner := &countingRunner{}
+		output := executeRun(context.Background(), runner, noFilesReader{}, RunInput{Role: "architect", Task: "task"})
+		if output.Status != "error" || output.Error == nil || output.Error.Kind != "InvalidRoleError" || runner.calls != 0 {
+			t.Fatalf("output=%#v runner calls=%d", output, runner.calls)
+		}
+	})
+
+	t.Run("file read failure", func(t *testing.T) {
+		wantErr := &workspace.WorkspaceError{Operation: "read file", Path: "missing.go", Err: errors.New("not found")}
+		runner := &countingRunner{}
+		output := executeRun(context.Background(), runner, errorFileReader{err: wantErr}, RunInput{Role: "coder", Task: "task", Files: []string{"missing.go"}})
+		if output.Status != "error" || output.Error == nil || output.Error.Kind != "WorkspaceError" || runner.calls != 0 {
+			t.Fatalf("output=%#v runner calls=%d", output, runner.calls)
+		}
+	})
+}
+
+func TestParseRunOutputRejectsMalformedEnvelopes(t *testing.T) {
+	valid := `{"status":"success","role":"coder","summary":"ok","artifacts":[],"findings":[],"risks":[],"notes":[]}`
+	for _, test := range []struct {
+		name      string
+		raw       string
+		wantError string
+	}{
+		{name: "unknown field", raw: `{"status":"success","role":"coder","summary":"ok","unexpected":true}`, wantError: "LLMInvalidJSONError"},
+		{name: "multiple values", raw: valid + ` {}`, wantError: "LLMInvalidJSONError"},
+		{name: "invalid status", raw: `{"status":"partial","role":"coder","summary":"ok"}`, wantError: "LLMResponseError"},
+		{name: "wrong role", raw: `{"status":"success","role":"reviewer","summary":"ok"}`, wantError: "LLMResponseError"},
+		{name: "empty summary", raw: `{"status":"success","role":"coder","summary":"  "}`, wantError: "LLMResponseError"},
+		{name: "error without details", raw: `{"status":"error","role":"coder","summary":"failed"}`, wantError: "LLMResponseError"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := parseRunOutput(test.raw, agent.RoleCoder)
+			var llmErr *llm.Error
+			if !errors.As(err, &llmErr) || string(llmErr.Kind) != test.wantError {
+				t.Fatalf("parseRunOutput() error = %v, want %s", err, test.wantError)
+			}
+		})
 	}
 }
 
-func TestExecuteRunPiPolicyValidatesWithoutReadingSourceContent(t *testing.T) {
-	reader := &validatingReader{}
-	runner := piPolicyRunner{staticRunner{response: `{"status":"success","role":"coder","summary":"ok","artifacts":[],"findings":[],"risks":[],"notes":[],"backend":"pi"}`}}
-	out := executeRun(context.Background(), runner, reader, RunInput{Role: "coder", Task: "task", Files: []string{"x.go"}})
-	if out.Status != "success" || reader.validated != 1 || reader.reads != 0 {
-		t.Fatalf("output=%#v reader=%+v", out, reader)
+func TestParseRunOutputNormalizesNullCollections(t *testing.T) {
+	raw := `{"status":"success","role":"coder","summary":"ok","artifacts":null,"findings":null,"risks":null,"notes":null,"changed_files":null,"execution_results":null,"warnings":null}`
+	output, err := parseRunOutput(raw, agent.RoleCoder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output.Artifacts == nil || output.Findings == nil || output.Risks == nil || output.Notes == nil || output.ChangedFiles == nil || output.ExecutionResults == nil || output.Warnings == nil {
+		t.Fatalf("nil collections were not normalized: %#v", output)
+	}
+}
+
+func TestErrorKindPreservesWrappedAgentAndBackendCategories(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "wrapped invalid role", err: fmt.Errorf("wrapped: %w", &agent.InvalidRoleError{Role: "architect"}), want: "InvalidRoleError"},
+		{name: "wrapped prompt error", err: fmt.Errorf("wrapped: %w", &agent.PromptError{Err: errors.New("empty task")}), want: "PromptError"},
+		{name: "wrapped workspace error", err: fmt.Errorf("wrapped: %w", &workspace.WorkspaceError{Operation: "read", Path: "source.go", Err: errors.New("not found")}), want: "WorkspaceError"},
+		{name: "LLM", err: fmt.Errorf("wrapped: %w", &llm.Error{Kind: llm.ErrorTimeout, Err: errors.New("timeout")}), want: "LLMTimeoutError"},
+		{name: "unknown", err: errors.New("unexpected"), want: "InternalError"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := errorKind(test.err); got != test.want {
+				t.Fatalf("errorKind() = %q, want %q", got, test.want)
+			}
+		})
 	}
 }
 
@@ -163,14 +224,16 @@ type staticRunner struct{ response string }
 
 func (r staticRunner) Run(context.Context, agent.PromptInput) (string, error) { return r.response, nil }
 
-type piPolicyRunner struct{ staticRunner }
+type countingRunner struct{ calls int }
 
-func (piPolicyRunner) NeedsInputFiles(agent.Role) bool { return false }
+func (r *countingRunner) Run(context.Context, agent.PromptInput) (string, error) {
+	r.calls++
+	return "", nil
+}
 
-type validatingReader struct{ validated, reads int }
+type errorFileReader struct{ err error }
 
-func (r *validatingReader) ReadFile(string) ([]byte, error) { r.reads++; return []byte("dirty"), nil }
-func (r *validatingReader) ValidatePath(string) error       { r.validated++; return nil }
+func (r errorFileReader) ReadFile(string) ([]byte, error) { return nil, r.err }
 
 type noFilesReader struct{}
 

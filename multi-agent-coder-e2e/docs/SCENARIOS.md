@@ -8,12 +8,12 @@ The repository E2E checks separate three kinds of checks:
    `multi-agent-coder` and does not silently replace a failed MCP call.
 2. Deterministic fixture scripts verify source/test outcomes and the MCP server's
    response classification with fixed candidates and mock HTTP responses.
-3. A live Go integration test verifies Main LLM, Coding LLM, and Pi role routing
+3. A live Go integration test verifies Main LLM and Coding LLM role routing
    against the locally configured services.
 
-The local agents never receive shell or Git authority in direct mode. Codex
-applies accepted artifacts and executes tests. Pi coder mode remains isolated in
-its temporary worktree and returns a patch for Codex to inspect.
+The local agents never receive shell or Git authority. Codex applies accepted
+artifacts and executes tests. Coder and fixer return JSON artifacts through the
+Coding LLM route; reviewer and tester use the Main LLM route.
 
 ## Commands
 
@@ -50,20 +50,16 @@ The live mode deliberately passes `--ignore-user-config`, making
 ## Live role-routing integration test
 
 The separate Go test `internal/mcp/TestLiveRoleRouting` exercises live Main
-LLM, Coding LLM, and Pi routing. It reads endpoint, model, and Pi provider
-settings from the same `MAC_*` environment variables as the MCP server. If
-`MAC_LLM_MODEL` is empty, it uses the first model ID returned by Main LLM's
-`/v1/models`. `MAC_PI_PROVIDER` and `MAC_PI_MODEL` must match an entry in
-Pi's `models.json`; the test does not assume provider or model names.
+LLM and Coding LLM routing. It reads endpoint and model settings from the same
+`MAC_*` environment variables as the MCP server.
 
 ```text
 MAC_LIVE_ROLE_E2E=1 go test -v ./internal/mcp -run '^TestLiveRoleRouting$' -count=1 -timeout=9m
 ```
 
-The expected routes are reviewer/tester → Main LLM, fixer → Coding LLM, and
-coder → Pi. The test disables the other direct endpoint for each role so that
-success demonstrates the intended backend route. Run the command from the
-repository root.
+The expected routes are coder/fixer → Coding LLM and reviewer/tester → Main
+LLM. The test disables the other endpoint for each role so success demonstrates
+the intended route. Run the command from the repository root.
 
 ## Expected routing
 

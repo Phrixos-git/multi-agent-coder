@@ -7,7 +7,6 @@ import (
 	"github.com/arietis/multi-agent-coder/internal/agent"
 	"github.com/arietis/multi-agent-coder/internal/config"
 	"github.com/arietis/multi-agent-coder/internal/llm"
-	"github.com/arietis/multi-agent-coder/internal/pirpc"
 	"github.com/arietis/multi-agent-coder/internal/workspace"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -26,13 +25,9 @@ type Server struct {
 func NewServer(cfg config.Config, logger *slog.Logger) (*Server, error) {
 	backends := make(map[agent.Role]agent.Backend, 4)
 	for _, role := range []agent.Role{agent.RoleCoder, agent.RoleFixer, agent.RoleReviewer, agent.RoleTester} {
-		if role == agent.RoleCoder && cfg.CoderBackend == "pi" {
-			backends[role] = agent.NewPiBackend(cfg.RepositoryRoot, pirpc.Config{Executable: cfg.PiExecutable, Provider: cfg.PiProvider, Model: cfg.PiModel, Args: cfg.PiRPCArgs}, cfg.PiTimeout, logger)
-			continue
-		}
 		endpoint, maxTokens := directConfigForRole(cfg, role)
 		format := llm.ResponseFormat{Type: "json_object"}
-		if role == agent.RoleFixer {
+		if role == agent.RoleCoder || role == agent.RoleFixer {
 			format = agentJSONSchema(role)
 		}
 		direct, err := agent.NewDirectBackend(llm.NewClientForBackendWithFormat(endpoint, maxTokens, cfg.LLMReasoningEffort, cfg.LLMTemperature, format, nil, logger))
@@ -47,13 +42,15 @@ func NewServer(cfg config.Config, logger *slog.Logger) (*Server, error) {
 // directConfigForRole resolves routing before the HTTP client is constructed.
 func directConfigForRole(cfg config.Config, role agent.Role) (config.LLMConfig, int) {
 	switch role {
+	case agent.RoleCoder:
+		return cfg.CodingLLM, cfg.CoderMaxTokens
 	case agent.RoleFixer:
 		return cfg.CodingLLM, cfg.FixerMaxTokens
 	case agent.RoleReviewer:
 		return cfg.MainLLM, cfg.ReviewerMaxTokens
 	case agent.RoleTester:
 		return cfg.MainLLM, cfg.TesterMaxTokens
-	default: // The legacy direct coder option uses Main LLM.
+	default:
 		return cfg.MainLLM, cfg.CoderMaxTokens
 	}
 }
@@ -63,12 +60,8 @@ func newServer(cfg config.Config, logger *slog.Logger, completer agent.ChatCompl
 	if err != nil {
 		return nil, err
 	}
-	var coder agent.Backend = direct
-	if cfg.CoderBackend == "pi" {
-		coder = agent.NewPiBackend(cfg.RepositoryRoot, pirpc.Config{Executable: cfg.PiExecutable, Provider: cfg.PiProvider, Model: cfg.PiModel, Args: cfg.PiRPCArgs}, cfg.PiTimeout, logger)
-	}
 	return newServerWithBackends(cfg, logger, map[agent.Role]agent.Backend{
-		agent.RoleCoder: coder, agent.RoleFixer: direct, agent.RoleReviewer: direct, agent.RoleTester: direct,
+		agent.RoleCoder: direct, agent.RoleFixer: direct, agent.RoleReviewer: direct, agent.RoleTester: direct,
 	})
 }
 
