@@ -2,9 +2,9 @@
 
 ## 1. 概要
 
-`multi-agent-coder` は、Codexを上位Orchestratorとして利用し、1つのローカルLLMを複数の論理エージェントとして利用するためのMCP Serverである。
+`multi-agent-coder` は、Codexを上位Orchestratorとして利用し、RoleごとにローカルLLM Backendを選択するMCP Serverである。
 
-物理的には1つのLLMを利用するが、タスクごとにSystem Promptと会話コンテキストを分離することで、以下の役割を持たせる。
+タスクごとにSystem Promptと会話コンテキストを分離することで、以下の役割を持たせる。
 
 - Coder
 - Reviewer
@@ -58,7 +58,6 @@ Codexですべてのコードを生成するのではなく、
 
 Version 1では以下は実装対象外とする。
 
-- 複数モデルの同時利用
 - 複数GPUへの分散
 - ローカルLLMによる直接的なGit操作
 - ローカルLLMによる任意Shellコマンド実行
@@ -70,6 +69,8 @@ Version 1では以下は実装対象外とする。
 - Web検索
 
 これらは必要になった段階でVersion 2以降へ追加する。
+
+Role別Backend routingはMain LLMとCoding LLMの2つの手動起動済みserverを利用する。自動起動・停止や複数Coding Modelからの自動選択は行わない。
 
 ---
 
@@ -104,19 +105,13 @@ Version 1では以下は実装対象外とする。
 │ ・LLM API Client         │
 │ ・Response検証           │
 └─────────────┬────────────┘
-              │ HTTP
+              │ Role別Backend selection
               ▼
 ┌──────────────────────────┐
-│       llama-server       │
-│                          │
-│  /v1/chat/completions    │
-└─────────────┬────────────┘
-              │
-              ▼
-┌──────────────────────────┐
-│          Qwen            │
-│                          │
-│ 1 physical model         │
+│ coder: Pi -> Coding LLM  │
+│ fixer: Direct -> Coding   │
+│ reviewer/tester: Direct   │
+│                 -> Main   │
 └──────────────────────────┘
 ```
 
@@ -394,22 +389,17 @@ fixer
 
 動作確認用。
 
-確認対象：
-
-```text
-MCP Server
-↓
-llama-server
-↓
-Local LLM
-```
+確認対象はMain LLM、Coding LLM、Pi実行ファイルとする。各LLMへ有限timeoutで個別に接続し、接続拒否による停止とHTTP/応答の失敗を区別する。Coding LLMが停止していてもMCP Serverは動作を続ける。
 
 レスポンス例：
 
 ```json
 {
   "status": "ok",
-  "llm": "available"
+  "llm": "available",
+  "main_llm": {"status": "available", "base_url": "http://127.0.0.1:8080", "model": "qwen3.8-27b"},
+  "coding_llm": {"status": "available", "base_url": "http://127.0.0.1:18082", "model": "qwen-coder"},
+  "pi": {"status": "available"}
 }
 ```
 
@@ -577,13 +567,12 @@ internal/llm/
 
 LLMリクエストには必ずTimeoutを設定する。
 
-Agent Role別Default：
+Backend別Default：
 
 ```text
-Coder:    300 seconds
-Reviewer: 180 seconds
-Tester:   180 seconds
-Fixer:    300 seconds
+Coder/Pi:         300 seconds
+Fixer/Coding LLM: 180 seconds
+Reviewer/Tester/Main LLM: 180 seconds
 ```
 
 Roleを指定しない低レベル呼び出しでは`MAC_LLM_TIMEOUT`を使用する。
@@ -790,6 +779,9 @@ multi-agent-coder/
 MAC_LLM_BASE_URL
 MAC_LLM_MODEL
 MAC_LLM_TIMEOUT
+MAC_CODING_LLM_BASE_URL
+MAC_CODING_LLM_MODEL
+MAC_CODING_LLM_TIMEOUT
 MAC_LLM_MAX_TOKENS
 MAC_CODER_MAX_TOKENS
 MAC_REVIEWER_MAX_TOKENS
@@ -806,10 +798,13 @@ Default：
 ```text
 MAC_LLM_BASE_URL=http://127.0.0.1:8080
 MAC_LLM_TIMEOUT=180s
+MAC_CODING_LLM_BASE_URL=http://127.0.0.1:18082
+MAC_CODING_LLM_MODEL=qwen-coder
+MAC_CODING_LLM_TIMEOUT=180s
 MAC_LLM_MAX_TOKENS=4096
 MAC_CODER_MAX_TOKENS=4096
-MAC_REVIEWER_MAX_TOKENS=1536
-MAC_TESTER_MAX_TOKENS=1536
+MAC_REVIEWER_MAX_TOKENS=4096
+MAC_TESTER_MAX_TOKENS=3072
 MAC_FIXER_MAX_TOKENS=4096
 MAC_LLM_REASONING_EFFORT=none
 MAC_LLM_TEMPERATURE=0.2
@@ -825,7 +820,7 @@ Tester:   MAC_TESTER_MAX_TOKENS
 Fixer:    MAC_FIXER_MAX_TOKENS
 ```
 
-Roleを指定しない低レベル呼び出しでは`MAC_LLM_MAX_TOKENS`を使用する。
+Role固有の値が未指定なら`MAC_LLM_MAX_TOKENS`、それも未指定ならコード内Defaultを使用する。Roleを指定しない低レベル呼び出しでも`MAC_LLM_MAX_TOKENS`を使用する。
 
 Model名は固定しない。
 
@@ -984,9 +979,9 @@ MCP
  ↓
 multi-agent-coder
  ↓
-llama-server
- ↓
-Qwen
+coder → Pi → Coding LLM
+fixer → Direct → Coding LLM
+reviewer/tester → Direct → Main LLM
 ```
 
 まで確認する。
@@ -1122,7 +1117,9 @@ Version 1のDirect経路を既定として維持しつつ、coderに限り設定
 ```text
 local_agent_run
   ├─ coder + MAC_CODER_BACKEND=pi -> PiBackend
-  └─ その他                         -> DirectBackend
+  ├─ coder + MAC_CODER_BACKEND=direct -> DirectBackend / Main LLM（既存互換）
+  ├─ fixer                          -> DirectBackend / Coding LLM
+  └─ reviewer, tester               -> DirectBackend / Main LLM
 ```
 
 PiBackendは実行時のGit `HEAD`から一時branch/worktreeを作り、Piを `--mode rpc --no-session` で起動する。stdin/stdoutはLF区切りJSONL、stderrは診断用として分離し、`agent_settled`を完了イベントとする。Context cancelまたは有限timeout時にはPiプロセスグループを終了する。
@@ -1140,8 +1137,6 @@ Version 1完成後に検討する。
 ```text
 Git Worktree
 並列Agent
-複数ローカルモデル
-Agent別モデル選択
 Agentごとのtemperature設定
 Task Graph
 Persistent Task State
@@ -1156,37 +1151,21 @@ Prompt evaluation
 
 # 32. 最終方針
 
-Version 1では、
+現在は、
 
 ```text
 Codex
     ↓
 multi-agent-coder MCP
     ↓
-1 llama-server
+Role別に選択したMain/Coding llama-server
     ↓
-1 Local LLM
+Local LLM
 ```
 
-という単純構成を維持する。
+RoleごとにBackendを解決し、System PromptとContextを分離する。Main/Codingの接続先は環境変数で指定し、LLM ClientはRoleによる接続先選択を行わない。
 
-マルチエージェント性は、
-
-```text
-複数モデル
-```
-
-ではなく、
-
-```text
-Role
-+
-System Prompt
-+
-Independent Context
-```
-
-によって実現する。
+Coding LLMのDirect応答にはAgent JSON schemaを指定する。JSONのdecodeとRole/Statusなどの検証は従来通りMCP層で行う。
 
 ローカルLLMは作業者に徹し、
 

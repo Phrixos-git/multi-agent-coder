@@ -32,12 +32,7 @@ type Client struct {
 	temperature     float64
 	httpClient      *http.Client
 	logger          *slog.Logger
-	optionsByRole   map[string]roleOptions
-}
-
-type roleOptions struct {
-	maxTokens int
-	timeout   time.Duration
+	responseFormat  ResponseFormat
 }
 
 // NewClient constructs a client from application configuration.
@@ -53,6 +48,17 @@ func NewClientWithHTTPClient(cfg config.Config, httpClient *http.Client) *Client
 
 // NewClientWithLogger constructs a client with explicit HTTP and logging dependencies.
 func NewClientWithLogger(cfg config.Config, httpClient *http.Client, logger *slog.Logger) *Client {
+	return NewClientForBackend(cfg.MainLLM, cfg.LLMMaxTokens, cfg.LLMReasoningEffort, cfg.LLMTemperature, httpClient, logger)
+}
+
+// NewClientForBackend binds one endpoint and generation limit to a client.
+// Role routing is resolved by the caller before constructing the client.
+func NewClientForBackend(backend config.LLMConfig, maxTokens int, reasoningEffort string, temperature float64, httpClient *http.Client, logger *slog.Logger) *Client {
+	return NewClientForBackendWithFormat(backend, maxTokens, reasoningEffort, temperature, ResponseFormat{Type: "json_object"}, httpClient, logger)
+}
+
+// NewClientForBackendWithFormat uses a caller-selected response constraint.
+func NewClientForBackendWithFormat(backend config.LLMConfig, maxTokens int, reasoningEffort string, temperature float64, format ResponseFormat, httpClient *http.Client, logger *slog.Logger) *Client {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
@@ -60,20 +66,15 @@ func NewClientWithLogger(cfg config.Config, httpClient *http.Client, logger *slo
 		logger = slog.Default()
 	}
 	return &Client{
-		endpoint:        strings.TrimRight(cfg.LLMBaseURL, "/") + chatCompletionsPath,
-		model:           cfg.LLMModel,
-		timeout:         cfg.LLMTimeout,
-		maxTokens:       cfg.LLMMaxTokens,
-		reasoningEffort: cfg.LLMReasoningEffort,
-		temperature:     cfg.LLMTemperature,
+		endpoint:        strings.TrimRight(backend.BaseURL, "/") + chatCompletionsPath,
+		model:           backend.Model,
+		timeout:         backend.Timeout,
+		maxTokens:       maxTokens,
+		reasoningEffort: reasoningEffort,
+		temperature:     temperature,
 		httpClient:      httpClient,
 		logger:          logger,
-		optionsByRole: map[string]roleOptions{
-			"coder":    {maxTokens: cfg.CoderMaxTokens, timeout: 300 * time.Second},
-			"reviewer": {maxTokens: cfg.ReviewerMaxTokens, timeout: 180 * time.Second},
-			"tester":   {maxTokens: cfg.TesterMaxTokens, timeout: 180 * time.Second},
-			"fixer":    {maxTokens: cfg.FixerMaxTokens, timeout: 300 * time.Second},
-		},
+		responseFormat:  format,
 	}
 }
 
@@ -85,34 +86,30 @@ func (c *Client) ChatCompletion(ctx context.Context, messages []Message, roles .
 	if len(roles) > 0 {
 		role = roles[0]
 	}
-	options, ok := c.optionsByRole[role]
-	if !ok {
-		options = roleOptions{maxTokens: c.maxTokens, timeout: c.timeout}
-	}
 	c.logger.DebugContext(ctx, "LLM request starting", "agent", role, "backend", "direct",
-		"model", c.model, "max_tokens", options.maxTokens)
+		"model", c.model, "max_tokens", c.maxTokens)
 	payload, err := json.Marshal(ChatCompletionRequest{
 		Model:           c.model,
 		Messages:        messages,
-		MaxTokens:       options.maxTokens,
+		MaxTokens:       c.maxTokens,
 		ReasoningEffort: c.reasoningEffort,
 		Temperature:     c.temperature,
-		ResponseFormat:  ResponseFormat{Type: "json_object"},
+		ResponseFormat:  c.responseFormat,
 	})
 	if err != nil {
 		return ChatCompletionResponse{}, &Error{Kind: ErrorResponse, Err: fmt.Errorf("encode request: %w", err)}
 	}
 
 	for attempt := 0; attempt < 2; attempt++ {
-		response, retry, err := c.do(ctx, payload, options.timeout)
+		response, retry, err := c.do(ctx, payload, c.timeout)
 		if err == nil {
 			choice := response.Choices[0]
 			c.logger.DebugContext(ctx, "LLM completion received", "agent", role, "backend", "direct",
-				"model", c.model, "max_tokens", options.maxTokens, "finish_reason", choice.FinishReason,
+				"model", c.model, "max_tokens", c.maxTokens, "finish_reason", choice.FinishReason,
 				"completion_tokens", response.Usage.CompletionTokens, "duration", time.Since(started))
 			if choice.FinishReason == "length" {
 				c.logger.WarnContext(ctx, "LLM generation failed", "agent", role, "backend", "direct",
-					"model", c.model, "max_tokens", options.maxTokens, "finish_reason", choice.FinishReason,
+					"model", c.model, "max_tokens", c.maxTokens, "finish_reason", choice.FinishReason,
 					"result", "failed", "error_type", "token_limit", "duration", time.Since(started))
 				return ChatCompletionResponse{}, &Error{Kind: ErrorTruncated, Err: errors.New("completion reached max_tokens")}
 			}
@@ -120,7 +117,7 @@ func (c *Client) ChatCompletion(ctx context.Context, messages []Message, roles .
 		}
 		if !retry || attempt == 1 {
 			c.logger.WarnContext(ctx, "LLM request failed", "agent", role, "backend", "direct",
-				"model", c.model, "max_tokens", options.maxTokens, "result", "failed",
+				"model", c.model, "max_tokens", c.maxTokens, "result", "failed",
 				"error_type", errorLogType(err), "duration", time.Since(started))
 			return ChatCompletionResponse{}, err
 		}

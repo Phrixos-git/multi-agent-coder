@@ -9,6 +9,9 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("MAC_LLM_BASE_URL", "")
 	t.Setenv("MAC_LLM_MODEL", "")
 	t.Setenv("MAC_LLM_TIMEOUT", "")
+	t.Setenv("MAC_CODING_LLM_BASE_URL", "")
+	t.Setenv("MAC_CODING_LLM_MODEL", "")
+	t.Setenv("MAC_CODING_LLM_TIMEOUT", "")
 	t.Setenv("MAC_LLM_MAX_TOKENS", "")
 	t.Setenv("MAC_CODER_MAX_TOKENS", "")
 	t.Setenv("MAC_REVIEWER_MAX_TOKENS", "")
@@ -26,7 +29,7 @@ func TestLoadDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.LLMBaseURL != defaultLLMBaseURL || cfg.LLMTimeout != 180*time.Second || cfg.LLMMaxTokens != 4096 || cfg.CoderMaxTokens != 4096 || cfg.ReviewerMaxTokens != 1536 || cfg.TesterMaxTokens != 1536 || cfg.FixerMaxTokens != 4096 || cfg.LLMReasoningEffort != "none" || cfg.LLMTemperature != 0.2 || cfg.LogLevel != "info" || cfg.CoderBackend != "direct" || cfg.PiExecutable != "pi" || cfg.PiTimeout != 300*time.Second {
+	if cfg.MainLLM != (LLMConfig{BaseURL: defaultLLMBaseURL, Timeout: 180 * time.Second}) || cfg.CodingLLM != (LLMConfig{BaseURL: defaultCodingLLMBaseURL, Model: defaultCodingLLMModel, Timeout: 180 * time.Second}) || cfg.LLMMaxTokens != 4096 || cfg.CoderMaxTokens != 4096 || cfg.ReviewerMaxTokens != 4096 || cfg.TesterMaxTokens != 3072 || cfg.FixerMaxTokens != 4096 || cfg.LLMReasoningEffort != "none" || cfg.LLMTemperature != 0.2 || cfg.LogLevel != "info" || cfg.CoderBackend != "direct" || cfg.PiExecutable != "pi" || cfg.PiTimeout != 300*time.Second {
 		t.Fatalf("Load() defaults = %+v", cfg)
 	}
 }
@@ -34,6 +37,11 @@ func TestLoadDefaults(t *testing.T) {
 func TestLoadLLMOverrides(t *testing.T) {
 	t.Setenv("MAC_REPOSITORY_ROOT", t.TempDir())
 	t.Setenv("MAC_LLM_TIMEOUT", "45s")
+	t.Setenv("MAC_LLM_BASE_URL", "http://127.0.0.1:19100")
+	t.Setenv("MAC_LLM_MODEL", "main-test")
+	t.Setenv("MAC_CODING_LLM_BASE_URL", "http://127.0.0.1:19101")
+	t.Setenv("MAC_CODING_LLM_MODEL", "coding-test")
+	t.Setenv("MAC_CODING_LLM_TIMEOUT", "55s")
 	t.Setenv("MAC_LLM_MAX_TOKENS", "512")
 	t.Setenv("MAC_CODER_MAX_TOKENS", "8192")
 	t.Setenv("MAC_REVIEWER_MAX_TOKENS", "4096")
@@ -46,8 +54,31 @@ func TestLoadLLMOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.LLMTimeout != 45*time.Second || cfg.LLMMaxTokens != 512 || cfg.CoderMaxTokens != 8192 || cfg.ReviewerMaxTokens != 4096 || cfg.TesterMaxTokens != 3072 || cfg.FixerMaxTokens != 8192 || cfg.LLMReasoningEffort != "low" || cfg.LLMTemperature != 0.7 {
+	if cfg.MainLLM != (LLMConfig{BaseURL: "http://127.0.0.1:19100", Model: "main-test", Timeout: 45 * time.Second}) || cfg.CodingLLM != (LLMConfig{BaseURL: "http://127.0.0.1:19101", Model: "coding-test", Timeout: 55 * time.Second}) || cfg.LLMMaxTokens != 512 || cfg.CoderMaxTokens != 8192 || cfg.ReviewerMaxTokens != 4096 || cfg.TesterMaxTokens != 3072 || cfg.FixerMaxTokens != 8192 || cfg.LLMReasoningEffort != "low" || cfg.LLMTemperature != 0.7 {
 		t.Fatalf("Load() overrides = %+v", cfg)
+	}
+}
+
+func TestLoadRoleTokenPrecedence(t *testing.T) {
+	t.Setenv("MAC_REPOSITORY_ROOT", t.TempDir())
+	t.Setenv("MAC_LLM_MAX_TOKENS", "2048")
+	for _, name := range []string{"MAC_CODER_MAX_TOKENS", "MAC_REVIEWER_MAX_TOKENS", "MAC_TESTER_MAX_TOKENS", "MAC_FIXER_MAX_TOKENS"} {
+		t.Setenv(name, "")
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.CoderMaxTokens != 2048 || cfg.ReviewerMaxTokens != 2048 || cfg.TesterMaxTokens != 2048 || cfg.FixerMaxTokens != 2048 {
+		t.Fatalf("global fallback = %+v", cfg)
+	}
+	t.Setenv("MAC_TESTER_MAX_TOKENS", "3072")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.TesterMaxTokens != 3072 || cfg.ReviewerMaxTokens != 2048 {
+		t.Fatalf("role override = %+v", cfg)
 	}
 }
 
@@ -59,6 +90,8 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 	}{
 		{name: "URL", env: "MAC_LLM_BASE_URL", value: "localhost:8080"},
 		{name: "timeout", env: "MAC_LLM_TIMEOUT", value: "forever"},
+		{name: "coding URL", env: "MAC_CODING_LLM_BASE_URL", value: "localhost:18082"},
+		{name: "coding timeout", env: "MAC_CODING_LLM_TIMEOUT", value: "0s"},
 		{name: "max tokens syntax", env: "MAC_LLM_MAX_TOKENS", value: "many"},
 		{name: "max tokens range", env: "MAC_LLM_MAX_TOKENS", value: "0"},
 		{name: "coder max tokens syntax", env: "MAC_CODER_MAX_TOKENS", value: "many"},

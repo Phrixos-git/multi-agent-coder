@@ -17,7 +17,14 @@ type ChatCompletionRequest struct {
 	ResponseFormat  ResponseFormat `json:"response_format"`
 }
 
-// ResponseFormat requests a structured JSON object from llama-server.
+// ResponseFormat requests structured JSON from llama-server.
 type ResponseFormat struct {
-	Type string `json:"type"`
+	Type       string          `json:"type"`
+	JSONSchema *JSONSchemaSpec `json:"json_schema,omitempty"`
+}
+
+type JSONSchemaSpec struct {
+	Name   string         `json:"name"`
+	Schema map[string]any `json:"schema"`
+	Strict bool           `json:"strict"`
 }

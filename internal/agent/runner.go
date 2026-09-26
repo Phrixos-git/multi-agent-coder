@@ -6,12 +6,12 @@ import (
 	"github.com/arietis/multi-agent-coder/internal/llm"
 )
 
-// ChatCompleter is the shared LLM capability needed by all agents.
+// ChatCompleter is the direct LLM capability used by an agent backend.
 type ChatCompleter interface {
 	ChatCompletion(context.Context, []llm.Message, ...string) (llm.ChatCompletionResponse, error)
 }
 
-// Runner executes independent logical agents against one shared LLM client.
+// Runner executes independent logical agents using configured role backends.
 type Runner struct {
 	backends map[Role]Backend
 }
@@ -32,7 +32,16 @@ func NewRunnerWithBackends(direct Backend, coder Backend) *Runner {
 	if coder == nil {
 		coder = direct
 	}
-	return &Runner{backends: map[Role]Backend{RoleCoder: coder, RoleReviewer: direct, RoleTester: direct, RoleFixer: direct}}
+	return NewRunnerWithRoleBackends(map[Role]Backend{RoleCoder: coder, RoleReviewer: direct, RoleTester: direct, RoleFixer: direct})
+}
+
+// NewRunnerWithRoleBackends selects one backend for each role at construction.
+func NewRunnerWithRoleBackends(backends map[Role]Backend) *Runner {
+	copied := make(map[Role]Backend, len(backends))
+	for role, backend := range backends {
+		copied[role] = backend
+	}
+	return &Runner{backends: copied}
 }
 
 // Run creates a fresh request for one role and returns its generated content.

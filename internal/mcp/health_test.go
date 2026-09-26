@@ -4,15 +4,34 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/arietis/multi-agent-coder/internal/config"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func TestLocalAgentHealth(t *testing.T) {
+	main := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			t.Errorf("main path = %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer main.Close()
+	coding := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			t.Errorf("coding path = %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer coding.Close()
 	server, err := NewServer(config.Config{
-		LLMBaseURL: "http://127.0.0.1:8080", RepositoryRoot: t.TempDir(),
+		MainLLM:        config.LLMConfig{BaseURL: main.URL, Model: "main", Timeout: time.Second},
+		CodingLLM:      config.LLMConfig{BaseURL: coding.URL, Model: "coding", Timeout: time.Second},
+		RepositoryRoot: t.TempDir(),
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
@@ -36,7 +55,59 @@ func TestLocalAgentHealth(t *testing.T) {
 	if !ok {
 		t.Fatalf("StructuredContent type = %T", result.StructuredContent)
 	}
-	if output["status"] != "ok" || output["llm"] != "not_checked" {
+	mainHealth := output["main_llm"].(map[string]any)
+	codingHealth := output["coding_llm"].(map[string]any)
+	if output["status"] != "ok" || output["llm"] != "available" || mainHealth["status"] != "available" || mainHealth["base_url"] != main.URL || codingHealth["status"] != "available" || codingHealth["model"] != "coding" {
 		t.Fatalf("StructuredContent = %#v", output)
+	}
+}
+
+func TestProbeLLMDistinguishesStoppedAndFailed(t *testing.T) {
+	stopped := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	url := stopped.URL
+	stopped.Close()
+	if got := probeLLM(context.Background(), config.LLMConfig{BaseURL: url}); got.Status != "stopped" {
+		t.Fatalf("stopped probe = %+v", got)
+	}
+	failed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) }))
+	defer failed.Close()
+	if got := probeLLM(context.Background(), config.LLMConfig{BaseURL: failed.URL}); got.Status != "failed" {
+		t.Fatalf("failed probe = %+v", got)
+	}
+}
+
+func TestLocalAgentHealthKeepsServingWhenCodingLLMStopped(t *testing.T) {
+	main := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }))
+	defer main.Close()
+	coding := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	codingURL := coding.URL
+	coding.Close()
+	server, err := NewServer(config.Config{
+		MainLLM:        config.LLMConfig{BaseURL: main.URL, Timeout: time.Second},
+		CodingLLM:      config.LLMConfig{BaseURL: codingURL, Timeout: time.Second},
+		RepositoryRoot: t.TempDir(),
+	}, discardLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "health-test", Version: "1"}, nil)
+	clientTransport, serverTransport := sdkmcp.NewInMemoryTransports()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = server.SDKServer().Run(ctx, serverTransport) }()
+	session, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	for range 2 {
+		result, err := session.CallTool(ctx, &sdkmcp.CallToolParams{Name: "local_agent_health"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := result.StructuredContent.(map[string]any)
+		if out["status"] != "degraded" || out["main_llm"].(map[string]any)["status"] != "available" || out["coding_llm"].(map[string]any)["status"] != "stopped" {
+			t.Fatalf("health = %#v", out)
+		}
 	}
 }

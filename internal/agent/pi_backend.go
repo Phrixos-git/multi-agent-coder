@@ -20,7 +20,7 @@ type PiBackend struct {
 }
 
 func NewPiBackend(repository string, cfg pirpc.Config, timeout time.Duration, logger *slog.Logger) *PiBackend {
-	return &PiBackend{manager: worktree.Manager{Repository: repository}, client: pirpc.Client{Config: cfg}, timeout: timeout, logger: logger}
+	return &PiBackend{manager: worktree.Manager{Repository: repository}, client: pirpc.Client{Config: cfg, Logger: logger}, timeout: timeout, logger: logger}
 }
 
 func (*PiBackend) UsesSuppliedFiles() bool { return false }
@@ -101,7 +101,11 @@ func (b *PiBackend) Run(ctx context.Context, input PromptInput) (raw string, ret
 			raw = string(data)
 			retErr = nil
 		}
-		b.logger.Info("Pi process exited", "task_id", taskID, "role", input.Role, "backend", "pi", "duration", time.Since(started), "error", operationErr)
+		errorKind := ""
+		if operationErr != nil {
+			errorKind = piErrorKind(operationErr)
+		}
+		b.logger.Info("Pi process exited", "task_id", taskID, "role", input.Role, "backend", "pi", "duration", time.Since(started), "success", operationErr == nil, "error_kind", errorKind)
 	}()
 	runCtx, cancel := context.WithTimeout(ctx, b.timeout)
 	defer cancel()
@@ -120,7 +124,7 @@ func (b *PiBackend) Run(ctx context.Context, input PromptInput) (raw string, ret
 	if result.AgentError != "" && operationErr == nil {
 		operationErr = &piAgentError{message: result.AgentError}
 	}
-	b.logger.InfoContext(ctx, "Pi process completed", "task_id", taskID, "role", input.Role, "backend", "pi", "duration", time.Since(started), "changed_files_count", len(changes.Files), "test_execution_result", result.ToolResults)
+	b.logger.InfoContext(ctx, "Pi process completed", "task_id", taskID, "role", input.Role, "backend", "pi", "duration", time.Since(started), "changed_files_count", len(changes.Files), "tool_execution_count", len(result.ToolResults))
 	return "", nil
 }
 

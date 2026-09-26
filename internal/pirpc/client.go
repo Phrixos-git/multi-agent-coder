@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os/exec"
+	"regexp"
 	"strings"
 	"sync"
 	"syscall"
@@ -25,7 +27,10 @@ type Result struct {
 	AgentError  string
 }
 
-type Client struct{ Config Config }
+type Client struct {
+	Config Config
+	Logger *slog.Logger
+}
 
 type Error struct {
 	Kind string
@@ -40,17 +45,18 @@ func failure(kind, format string, args ...any) error {
 }
 
 type event struct {
-	Type     string          `json:"type"`
-	ID       string          `json:"id,omitempty"`
-	Command  string          `json:"command,omitempty"`
-	Success  bool            `json:"success,omitempty"`
-	Error    string          `json:"error,omitempty"`
-	ToolName string          `json:"toolName,omitempty"`
-	IsError  bool            `json:"isError,omitempty"`
-	Result   json.RawMessage `json:"result,omitempty"`
-	Args     json.RawMessage `json:"args,omitempty"`
-	Message  json.RawMessage `json:"message,omitempty"`
-	Data     struct {
+	Type                  string          `json:"type"`
+	ID                    string          `json:"id,omitempty"`
+	Command               string          `json:"command,omitempty"`
+	Success               bool            `json:"success,omitempty"`
+	Error                 string          `json:"error,omitempty"`
+	ToolName              string          `json:"toolName,omitempty"`
+	IsError               bool            `json:"isError,omitempty"`
+	Result                json.RawMessage `json:"result,omitempty"`
+	Args                  json.RawMessage `json:"args,omitempty"`
+	Message               json.RawMessage `json:"message,omitempty"`
+	AssistantMessageEvent json.RawMessage `json:"assistantMessageEvent,omitempty"`
+	Data                  struct {
 		Text *string `json:"text"`
 	} `json:"data,omitempty"`
 }
@@ -73,6 +79,11 @@ func (c Client) Run(ctx context.Context, dir, prompt string) (Result, error) {
 	args = append(args, c.Config.Args...)
 	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.Dir = dir
+	logger := c.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.DebugContext(ctx, "Pi subprocess starting", "cwd", cmd.Dir)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
 		if cmd.Process == nil {
@@ -137,9 +148,17 @@ func (c Client) Run(ctx context.Context, dir, prompt string) (Result, error) {
 			if err := json.Unmarshal(line, &ev); err != nil {
 				return result, failure("PiRPCProtocolError", "decode JSONL: %w", err)
 			}
+			logger.DebugContext(ctx, "Pi RPC event", "event_type", ev.Type)
+			if ev.Type == "response" {
+				logger.DebugContext(ctx, "Pi RPC response", "command", ev.Command, "success", ev.Success)
+			}
+			if ev.Type == "message_update" {
+				messageEventType, toolName := assistantMessageEventMetadata(ev.AssistantMessageEvent)
+				logger.DebugContext(ctx, "Pi assistant message update", "assistant_message_event_type", messageEventType, "tool_name", toolName)
+			}
 			switch ev.Type {
 			case "response":
-				if ev.ID == "task" {
+				if ev.ID == "task" && ev.Command == "prompt" {
 					if !ev.Success {
 						return result, failure("PiRPCProtocolError", "prompt rejected: %s", ev.Error)
 					}
@@ -147,6 +166,7 @@ func (c Client) Run(ctx context.Context, dir, prompt string) (Result, error) {
 				}
 			case "tool_execution_end":
 				result.ToolResults = append(result.ToolResults, toolResult(ev))
+				logger.DebugContext(ctx, "Pi tool execution ended", "tool_name", ev.ToolName, "success", !ev.IsError, "is_error", ev.IsError)
 			case "message_end":
 				var message struct{ Role, StopReason, ErrorMessage string }
 				if json.Unmarshal(ev.Message, &message) == nil && message.Role == "assistant" && (message.StopReason == "error" || message.ErrorMessage != "") {
@@ -157,6 +177,7 @@ func (c Client) Run(ctx context.Context, dir, prompt string) (Result, error) {
 				}
 			case "agent_settled":
 				settled = true
+				logger.DebugContext(ctx, "Pi agent settled")
 			}
 		}
 		if readErr != nil && !settled {
@@ -186,12 +207,21 @@ func (c Client) Run(ctx context.Context, dir, prompt string) (Result, error) {
 		if err := json.Unmarshal(bytes.TrimSpace(line), &ev); err != nil {
 			return result, failure("PiRPCProtocolError", "decode final text: %w", err)
 		}
+		if ev.Type == "response" {
+			logger.DebugContext(ctx, "Pi RPC response", "command", ev.Command, "success", ev.Success)
+		}
 		if ev.Type == "response" && ev.ID == "summary" {
+			if ev.Command != "get_last_assistant_text" {
+				return result, failure("PiRPCProtocolError", "unexpected final text response command: %s", ev.Command)
+			}
 			if !ev.Success {
 				return result, failure("PiRPCProtocolError", "final text rejected: %s", ev.Error)
 			}
 			if ev.Data.Text != nil {
-				result.Summary = *ev.Data.Text
+				result.Summary = sanitizeSummary(*ev.Data.Text)
+				if result.Summary == "" && strings.TrimSpace(*ev.Data.Text) != "" {
+					logger.DebugContext(ctx, "Pi final text omitted", "reason", "tool_call_json")
+				}
 			}
 			break
 		}
@@ -203,6 +233,68 @@ func (c Client) Run(ctx context.Context, dir, prompt string) (Result, error) {
 		return result, failure("PiAbnormalExit", "%w: %s", waitErr, strings.TrimSpace(stderrBuf.String()))
 	}
 	return result, nil
+}
+
+var fencedCodeBlock = regexp.MustCompile("(?s)```[^\\n]*\\n(.*?)\\n?```")
+
+func sanitizeSummary(text string) string {
+	if isToolCallJSON(text) {
+		return ""
+	}
+	cleaned := fencedCodeBlock.ReplaceAllStringFunc(text, func(block string) string {
+		match := fencedCodeBlock.FindStringSubmatch(block)
+		if len(match) == 2 && isToolCallJSON(match[1]) {
+			return ""
+		}
+		return block
+	})
+	return strings.TrimSpace(cleaned)
+}
+
+func assistantMessageEventMetadata(raw json.RawMessage) (eventType, toolName string) {
+	var item struct {
+		Type     string `json:"type"`
+		ToolName string `json:"toolName"`
+		ToolCall struct {
+			Name string `json:"name"`
+		} `json:"toolCall"`
+	}
+	if json.Unmarshal(raw, &item) != nil {
+		return "", ""
+	}
+	if item.ToolName == "" {
+		toolName = item.ToolCall.Name
+	} else {
+		toolName = item.ToolName
+	}
+	return item.Type, toolName
+}
+
+func isToolCallJSON(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	if strings.HasPrefix(trimmed, "{{") && strings.HasSuffix(trimmed, "}}") {
+		trimmed = strings.TrimSpace(trimmed[1 : len(trimmed)-1])
+	}
+	if strings.HasPrefix(trimmed, "```") {
+		if newline := strings.IndexByte(trimmed, '\n'); newline >= 0 {
+			trimmed = strings.TrimSpace(trimmed[newline+1:])
+		}
+		trimmed = strings.TrimSuffix(trimmed, "```")
+		trimmed = strings.TrimSpace(trimmed)
+	}
+	var item struct {
+		Name      string          `json:"name"`
+		Tool      string          `json:"tool"`
+		ToolName  string          `json:"toolName"`
+		Arguments json.RawMessage `json:"arguments"`
+		Args      json.RawMessage `json:"args"`
+	}
+	if json.Unmarshal([]byte(trimmed), &item) != nil {
+		return false
+	}
+	name := item.Name != "" || item.Tool != "" || item.ToolName != ""
+	arguments := len(item.Arguments) > 0 || len(item.Args) > 0
+	return name && arguments
 }
 
 func toolResult(ev event) string {

@@ -14,11 +14,13 @@ import (
 
 const (
 	defaultLLMBaseURL         = "http://127.0.0.1:8080"
+	defaultCodingLLMBaseURL   = "http://127.0.0.1:18082"
+	defaultCodingLLMModel     = "qwen-coder"
 	defaultLLMTimeout         = 180 * time.Second
 	defaultLLMMaxTokens       = 4096
 	defaultCoderMaxTokens     = 4096
-	defaultReviewerMaxTokens  = 1536
-	defaultTesterMaxTokens    = 1536
+	defaultReviewerMaxTokens  = 4096
+	defaultTesterMaxTokens    = 3072
 	defaultFixerMaxTokens     = 4096
 	defaultLLMReasoningEffort = "none"
 	defaultLLMTemperature     = 0.2
@@ -28,11 +30,17 @@ const (
 	defaultPiTimeout          = 300 * time.Second
 )
 
+// LLMConfig identifies one OpenAI-compatible local model endpoint.
+type LLMConfig struct {
+	BaseURL string
+	Model   string
+	Timeout time.Duration
+}
+
 // Config contains process configuration loaded from MAC_* environment variables.
 type Config struct {
-	LLMBaseURL         string
-	LLMModel           string
-	LLMTimeout         time.Duration
+	MainLLM            LLMConfig
+	CodingLLM          LLMConfig
 	LLMMaxTokens       int
 	CoderMaxTokens     int
 	ReviewerMaxTokens  int
@@ -65,23 +73,27 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	codingTimeout, err := parseDuration("MAC_CODING_LLM_TIMEOUT", defaultLLMTimeout)
+	if err != nil {
+		return Config{}, err
+	}
 	maxTokens, err := parseInt("MAC_LLM_MAX_TOKENS", defaultLLMMaxTokens)
 	if err != nil {
 		return Config{}, err
 	}
-	coderMaxTokens, err := parseInt("MAC_CODER_MAX_TOKENS", defaultCoderMaxTokens)
+	coderMaxTokens, err := parseRoleMaxTokens("MAC_CODER_MAX_TOKENS", defaultCoderMaxTokens, maxTokens)
 	if err != nil {
 		return Config{}, err
 	}
-	reviewerMaxTokens, err := parseInt("MAC_REVIEWER_MAX_TOKENS", defaultReviewerMaxTokens)
+	reviewerMaxTokens, err := parseRoleMaxTokens("MAC_REVIEWER_MAX_TOKENS", defaultReviewerMaxTokens, maxTokens)
 	if err != nil {
 		return Config{}, err
 	}
-	testerMaxTokens, err := parseInt("MAC_TESTER_MAX_TOKENS", defaultTesterMaxTokens)
+	testerMaxTokens, err := parseRoleMaxTokens("MAC_TESTER_MAX_TOKENS", defaultTesterMaxTokens, maxTokens)
 	if err != nil {
 		return Config{}, err
 	}
-	fixerMaxTokens, err := parseInt("MAC_FIXER_MAX_TOKENS", defaultFixerMaxTokens)
+	fixerMaxTokens, err := parseRoleMaxTokens("MAC_FIXER_MAX_TOKENS", defaultFixerMaxTokens, maxTokens)
 	if err != nil {
 		return Config{}, err
 	}
@@ -95,9 +107,14 @@ func Load() (Config, error) {
 	}
 
 	cfg := Config{
-		LLMBaseURL:         envOrDefault("MAC_LLM_BASE_URL", defaultLLMBaseURL),
-		LLMModel:           strings.TrimSpace(os.Getenv("MAC_LLM_MODEL")),
-		LLMTimeout:         timeout,
+		MainLLM: LLMConfig{
+			BaseURL: envOrDefault("MAC_LLM_BASE_URL", defaultLLMBaseURL),
+			Model:   strings.TrimSpace(os.Getenv("MAC_LLM_MODEL")), Timeout: timeout,
+		},
+		CodingLLM: LLMConfig{
+			BaseURL: envOrDefault("MAC_CODING_LLM_BASE_URL", defaultCodingLLMBaseURL),
+			Model:   envOrDefault("MAC_CODING_LLM_MODEL", defaultCodingLLMModel), Timeout: codingTimeout,
+		},
 		LLMMaxTokens:       maxTokens,
 		CoderMaxTokens:     coderMaxTokens,
 		ReviewerMaxTokens:  reviewerMaxTokens,
@@ -121,12 +138,17 @@ func Load() (Config, error) {
 }
 
 func (c *Config) validate() error {
-	u, err := url.ParseRequestURI(c.LLMBaseURL)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return fmt.Errorf("ConfigError: MAC_LLM_BASE_URL must be an absolute HTTP(S) URL")
-	}
-	if c.LLMTimeout <= 0 {
-		return fmt.Errorf("ConfigError: MAC_LLM_TIMEOUT must be greater than zero")
+	for _, backend := range []struct {
+		name string
+		cfg  LLMConfig
+	}{{"MAC_LLM", c.MainLLM}, {"MAC_CODING_LLM", c.CodingLLM}} {
+		u, err := url.ParseRequestURI(backend.cfg.BaseURL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return fmt.Errorf("ConfigError: %s_BASE_URL must be an absolute HTTP(S) URL", backend.name)
+		}
+		if backend.cfg.Timeout <= 0 {
+			return fmt.Errorf("ConfigError: %s_TIMEOUT must be greater than zero", backend.name)
+		}
 	}
 	if c.LLMMaxTokens <= 0 {
 		return fmt.Errorf("ConfigError: MAC_LLM_MAX_TOKENS must be greater than zero")
@@ -217,6 +239,14 @@ func parseInt(name string, fallback int) (int, error) {
 		return 0, fmt.Errorf("ConfigError: parse %s: %w", name, err)
 	}
 	return parsed, nil
+}
+
+func parseRoleMaxTokens(name string, codeDefault, global int) (int, error) {
+	fallback := codeDefault
+	if strings.TrimSpace(os.Getenv("MAC_LLM_MAX_TOKENS")) != "" {
+		fallback = global
+	}
+	return parseInt(name, fallback)
 }
 
 func parseFloat(name string, fallback float64) (float64, error) {

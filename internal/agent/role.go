@@ -2,7 +2,7 @@ package agent
 
 import "fmt"
 
-// Role identifies an independent logical agent using the shared LLM.
+// Role identifies an independent logical agent.
 type Role string
 
 const (

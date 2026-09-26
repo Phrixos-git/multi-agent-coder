@@ -67,39 +67,23 @@ func TestChatCompletionRetryableStatus(t *testing.T) {
 	}
 }
 
-func TestChatCompletionRoleOptionsAndJSONResponseFormat(t *testing.T) {
-	tests := []struct {
-		role      string
-		maxTokens int
-		timeout   time.Duration
-	}{
-		{role: "coder", maxTokens: 8192, timeout: 300 * time.Second},
-		{role: "reviewer", maxTokens: 4096, timeout: 180 * time.Second},
-		{role: "tester", maxTokens: 3072, timeout: 180 * time.Second},
-		{role: "fixer", maxTokens: 8192, timeout: 300 * time.Second},
-	}
-	for _, test := range tests {
-		t.Run(test.role, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				var request ChatCompletionRequest
-				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-					t.Fatal(err)
-				}
-				if request.MaxTokens != test.maxTokens || request.ResponseFormat.Type != "json_object" {
-					t.Errorf("request = %+v", request)
-				}
-				_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{}"},"finish_reason":"stop"}]}`))
-			}))
-			defer server.Close()
-
-			client := newTestClient(server.URL, time.Second)
-			if client.optionsByRole[test.role].timeout != test.timeout {
-				t.Errorf("timeout = %s, want %s", client.optionsByRole[test.role].timeout, test.timeout)
-			}
-			if _, err := client.ChatCompletion(context.Background(), nil, test.role); err != nil {
-				t.Fatalf("ChatCompletion() error = %v", err)
-			}
-		})
+func TestChatCompletionUsesConfiguredLimitForAnyRole(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request ChatCompletionRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		if request.MaxTokens != 512 || request.ResponseFormat.Type != "json_object" {
+			t.Errorf("request = %+v", request)
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{}"},"finish_reason":"stop"}]}`))
+	}))
+	defer server.Close()
+	client := newTestClient(server.URL, time.Second)
+	for _, role := range []string{"coder", "reviewer", "tester", "fixer"} {
+		if _, err := client.ChatCompletion(context.Background(), nil, role); err != nil {
+			t.Fatalf("ChatCompletion(%s) error = %v", role, err)
+		}
 	}
 }
 
@@ -171,9 +155,7 @@ func TestChatCompletionRetriesConnectionResetOnce(t *testing.T) {
 		return nil, syscall.ECONNRESET
 	})}
 	client := NewClientWithHTTPClient(config.Config{
-		LLMBaseURL: "http://127.0.0.1:8080",
-		LLMModel:   "qwen-test",
-		LLMTimeout: time.Second,
+		MainLLM: config.LLMConfig{BaseURL: "http://127.0.0.1:8080", Model: "qwen-test", Timeout: time.Second},
 	}, httpClient)
 
 	_, err := client.ChatCompletion(context.Background(), nil)
@@ -202,14 +184,8 @@ func TestChatCompletionDoesNotRetryCallerCancellation(t *testing.T) {
 
 func newTestClient(baseURL string, timeout time.Duration) *Client {
 	return NewClient(config.Config{
-		LLMBaseURL:         baseURL,
-		LLMModel:           "qwen-test",
-		LLMTimeout:         timeout,
+		MainLLM:            config.LLMConfig{BaseURL: baseURL, Model: "qwen-test", Timeout: timeout},
 		LLMMaxTokens:       512,
-		CoderMaxTokens:     8192,
-		ReviewerMaxTokens:  4096,
-		TesterMaxTokens:    3072,
-		FixerMaxTokens:     8192,
 		LLMReasoningEffort: "none",
 		LLMTemperature:     0.2,
 	})

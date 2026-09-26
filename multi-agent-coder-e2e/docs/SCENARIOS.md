@@ -2,12 +2,14 @@
 
 ## Scope
 
-This fixture separates two kinds of checks:
+The repository E2E checks separate three kinds of checks:
 
 1. Live Codex-to-MCP acceptance calls verify that Codex invokes
    `multi-agent-coder` and does not silently replace a failed MCP call.
-2. Deterministic scripts verify source/test outcomes and the MCP server's
+2. Deterministic fixture scripts verify source/test outcomes and the MCP server's
    response classification with fixed candidates and mock HTTP responses.
+3. A live Go integration test verifies Main LLM, Coding LLM, and Pi role routing
+   against the locally configured services.
 
 The local agents never receive shell or Git authority in direct mode. Codex
 applies accepted artifacts and executes tests. Pi coder mode remains isolated in
@@ -44,6 +46,24 @@ MAC_E2E_LIVE_CODEX=1 scripts/e2e-07-mcp-unavailable
 The live mode deliberately passes `--ignore-user-config`, making
 `multi-agent-coder` unavailable. It is read-only and must emit an explicit
 `mcp_error` without a tool, shell, or sub-agent event.
+
+## Live role-routing integration test
+
+The separate Go test `internal/mcp/TestLiveRoleRouting` exercises live Main
+LLM, Coding LLM, and Pi routing. It reads endpoint, model, and Pi provider
+settings from the same `MAC_*` environment variables as the MCP server. If
+`MAC_LLM_MODEL` is empty, it uses the first model ID returned by Main LLM's
+`/v1/models`. `MAC_PI_PROVIDER` and `MAC_PI_MODEL` must match an entry in
+Pi's `models.json`; the test does not assume provider or model names.
+
+```text
+MAC_LIVE_ROLE_E2E=1 go test -v ./internal/mcp -run '^TestLiveRoleRouting$' -count=1 -timeout=9m
+```
+
+The expected routes are reviewer/tester → Main LLM, fixer → Coding LLM, and
+coder → Pi. The test disables the other direct endpoint for each role so that
+success demonstrates the intended backend route. Run the command from the
+repository root.
 
 ## Expected routing
 

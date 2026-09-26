@@ -122,7 +122,7 @@ func TestExecuteRunClassifiesHTTPAgentResponses(t *testing.T) {
 			}))
 			defer server.Close()
 
-			client := llm.NewClient(config.Config{LLMBaseURL: server.URL, LLMModel: "test", LLMTimeout: time.Second, LLMMaxTokens: 1, CoderMaxTokens: 1})
+			client := llm.NewClient(config.Config{MainLLM: config.LLMConfig{BaseURL: server.URL, Model: "test", Timeout: time.Second}, LLMMaxTokens: 1, CoderMaxTokens: 1})
 			runner, err := agent.NewRunner(client)
 			if err != nil {
 				t.Fatal(err)
