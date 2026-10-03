@@ -64,6 +64,12 @@ func TestValidatorRejectsSecretFiles(t *testing.T) {
 	for _, path := range []string{
 		".env",
 		"config/.env.local",
+		".env.production",
+		".env.example.pem",
+		".env.example.key",
+		"secrets/.env.example",
+		".env.local/.env.example",
+		".env.example/.env.local",
 		"certs/client.pem",
 		"certs/client.key",
 		".ssh/id_rsa",
@@ -76,6 +82,9 @@ func TestValidatorRejectsSecretFiles(t *testing.T) {
 			var workspaceErr *WorkspaceError
 			if !errors.As(err, &workspaceErr) {
 				t.Fatalf("Validate(%q) error = %v, want WorkspaceError", path, err)
+			}
+			if _, err := validator.ValidateOverlay(path); !errors.As(err, &workspaceErr) {
+				t.Fatalf("ValidateOverlay(%q) error = %v, want WorkspaceError", path, err)
 			}
 		})
 	}
@@ -100,5 +109,33 @@ func TestValidatorAllowsRegularFile(t *testing.T) {
 	}
 	if validated != path {
 		t.Fatalf("Validate() = %q, want %q", validated, path)
+	}
+}
+
+func TestValidatorAllowsEnvExample(t *testing.T) {
+	root := t.TempDir()
+	validator, err := NewValidator(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{".env.example", "config/.env.example", ".env.example.local", ".env.production.env.example", ".ENV.EXAMPLE.LOCAL"} {
+		t.Run(path, func(t *testing.T) {
+			want := filepath.Join(root, filepath.FromSlash(path))
+			if got, err := validator.ValidateOverlay(path); err != nil || got != want {
+				t.Fatalf("ValidateOverlay(%q) = %q, %v, want %q, nil", path, got, err, want)
+			}
+			if err := os.MkdirAll(filepath.Dir(want), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(want, []byte("EXAMPLE=value\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if got, err := validator.Validate(path); err != nil || got != want {
+				t.Fatalf("Validate(%q) = %q, %v, want %q, nil", path, got, err, want)
+			}
+			if got, err := validator.ValidateOverlay(path); err != nil || got != want {
+				t.Fatalf("ValidateOverlay(%q) = %q, %v, want %q, nil", path, got, err, want)
+			}
+		})
 	}
 }

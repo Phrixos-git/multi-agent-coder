@@ -122,7 +122,7 @@ func escapesRoot(path string) bool {
 func secretComponent(path string) bool {
 	for _, component := range strings.Split(filepath.ToSlash(path), "/") {
 		name := strings.ToLower(component)
-		if name == ".env" || strings.HasPrefix(name, ".env.") ||
+		if name == ".env" || (strings.HasPrefix(name, ".env.") && !strings.Contains(name, ".env.example")) ||
 			strings.HasSuffix(name, ".pem") || strings.HasSuffix(name, ".key") ||
 			name == "id_rsa" || name == "id_ed25519" ||
 			strings.HasPrefix(name, "credentials") || strings.HasPrefix(name, "secrets") {

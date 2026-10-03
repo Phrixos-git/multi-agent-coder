@@ -903,6 +903,11 @@ credentials*
 secrets*
 ```
 
+ただし、`.env.*`の判定では、ファイル名に`.env.example`を含むもの
+（例：`.env.example`、`.env.example.local`）をDefaultで許可する。
+Secret判定は大文字・小文字を区別せず、各パス要素とsymlinkの実体パスにも適用する。
+この例外は他の拒否パターンには適用しない。
+
 必要な場合のみ明示許可方式にする。
 
 ## Local API

@@ -52,14 +52,20 @@ func TestWorktreeStartsAtHEADAndCollectsChanges(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(wt.Path(), ".env.secret"), []byte("SECRET SHOULD NOT LEAK"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(wt.Path(), ".env.example"), []byte("EXAMPLE=value\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wt.Path(), ".env.example.local"), []byte("LOCAL_EXAMPLE=value\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	patch, files, err := wt.Collect()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(patch, "updated") || !strings.Contains(patch, "new file") || strings.Contains(patch, "SECRET SHOULD NOT LEAK") {
+	if !strings.Contains(patch, "updated") || !strings.Contains(patch, "new file") || !strings.Contains(patch, "+EXAMPLE=value") || !strings.Contains(patch, "+LOCAL_EXAMPLE=value") || strings.Contains(patch, "SECRET SHOULD NOT LEAK") {
 		t.Fatalf("unexpected patch: %q", patch)
 	}
-	if strings.Join(files, ",") != "new.txt,tracked.txt" {
+	if strings.Join(files, ",") != ".env.example,.env.example.local,new.txt,tracked.txt" {
 		t.Fatalf("changed files = %#v", files)
 	}
 }

@@ -73,17 +73,24 @@ func TestReaderRejectsSymlinkAliasForSecret(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, ".env"), secretContent, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(".env", filepath.Join(root, "apparently-safe")); err != nil {
-		t.Fatal(err)
+	for _, alias := range []string{"apparently-safe", ".env.example"} {
+		if err := os.Symlink(".env", filepath.Join(root, alias)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	reader, err := NewReader(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = reader.Close() })
-	content, err := reader.ReadFile("apparently-safe")
-	if err == nil || content != nil || bytes.Contains(content, secretContent) {
-		t.Fatalf("ReadFile() content = %q, error = %v", content, err)
+	for _, alias := range []string{"apparently-safe", ".env.example"} {
+		content, err := reader.ReadFile(alias)
+		if err == nil || content != nil || bytes.Contains(content, secretContent) {
+			t.Fatalf("ReadFile(%q) content = %q, error = %v", alias, content, err)
+		}
+		if _, err := reader.validator.ValidateOverlay(alias); err == nil {
+			t.Fatalf("ValidateOverlay(%q) accepted symlink to secret", alias)
+		}
 	}
 }
 

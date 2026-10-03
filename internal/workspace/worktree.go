@@ -165,7 +165,7 @@ func (w *Worktree) Collect() (string, []string, error) {
 	paths := make([]string, 0)
 	var patch strings.Builder
 	for _, p := range strings.Split(pathsRaw, "\x00") {
-		if p == "" || isSecretPath(p) {
+		if p == "" || secretComponent(p) {
 			continue
 		}
 		paths = append(paths, filepath.ToSlash(p))
@@ -216,14 +216,4 @@ func gitOutput(dir string, args ...string) (string, error) {
 		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
 	}
 	return stdout.String(), nil
-}
-
-func isSecretPath(path string) bool {
-	for _, component := range strings.Split(filepath.ToSlash(path), "/") {
-		n := strings.ToLower(component)
-		if n == ".env" || strings.HasPrefix(n, ".env.") || strings.HasSuffix(n, ".pem") || strings.HasSuffix(n, ".key") || n == "id_rsa" || n == "id_ed25519" || strings.HasPrefix(n, "credentials") || strings.HasPrefix(n, "secrets") {
-			return true
-		}
-	}
-	return false
 }
