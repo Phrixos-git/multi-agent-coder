@@ -45,6 +45,12 @@ func (r *Reader) ReadFile(path string) ([]byte, error) {
 // ValidatePath checks a requested path without reading its content.
 func (r *Reader) ValidatePath(path string) error { _, err := r.validator.Validate(path); return err }
 
+// ValidateOverlayPath permits missing leaves for Pi fixer new/deleted files.
+func (r *Reader) ValidateOverlayPath(path string) error {
+	_, err := r.validator.ValidateOverlay(path)
+	return err
+}
+
 // readConfined performs the actual operation relative to an open directory
 // handle. os.Root prevents symlink replacement between validation and use
 // from redirecting the read outside the repository.

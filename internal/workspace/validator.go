@@ -75,6 +75,41 @@ func (v *Validator) Validate(path string) (string, error) {
 	return canonicalPath, nil
 }
 
+// ValidateOverlay resolves a repository-relative target while allowing the
+// leaf to be absent (new or deleted files are valid overlay states).
+func (v *Validator) ValidateOverlay(path string) (string, error) {
+	if path == "" || filepath.IsAbs(path) {
+		return "", newWorkspaceError("validate overlay path", path, fmt.Errorf("path must be repository-relative"))
+	}
+	cleaned := filepath.Clean(path)
+	if cleaned == "." || escapesRoot(cleaned) || secretComponent(cleaned) {
+		return "", newWorkspaceError("validate overlay path", path, fmt.Errorf("path traversal or secret path is denied"))
+	}
+	candidate := filepath.Join(v.root, cleaned)
+	probe := candidate
+	for {
+		resolved, err := filepath.EvalSymlinks(probe)
+		if err == nil {
+			if !withinRoot(v.root, resolved) {
+				return "", newWorkspaceError("validate overlay path", path, fmt.Errorf("path resolves outside repository root"))
+			}
+			rel, relErr := filepath.Rel(v.root, resolved)
+			if relErr != nil || secretComponent(rel) {
+				return "", newWorkspaceError("validate overlay path", path, fmt.Errorf("secret path is denied"))
+			}
+			return candidate, nil
+		}
+		if _, statErr := os.Lstat(probe); statErr == nil {
+			return "", newWorkspaceError("validate overlay path", path, fmt.Errorf("unresolvable symlink is denied"))
+		}
+		parent := filepath.Dir(probe)
+		if parent == probe {
+			return "", newWorkspaceError("validate overlay path", path, err)
+		}
+		probe = parent
+	}
+}
+
 func withinRoot(root, path string) bool {
 	relative, err := filepath.Rel(root, path)
 	return err == nil && relative != ".." && !escapesRoot(relative)

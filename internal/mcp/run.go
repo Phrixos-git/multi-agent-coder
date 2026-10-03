@@ -12,12 +12,13 @@ import (
 	"time"
 
 	"github.com/arietis/multi-agent-coder/internal/agent"
+	"github.com/arietis/multi-agent-coder/internal/config"
 	"github.com/arietis/multi-agent-coder/internal/llm"
 	"github.com/arietis/multi-agent-coder/internal/workspace"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// RunInput is the complete, repository-read-only input to local_agent_run.
+// RunInput is the complete input to one local_agent_run invocation.
 type RunInput struct {
 	Role              string   `json:"role" jsonschema:"agent role: coder, reviewer, tester, or fixer"`
 	Task              string   `json:"task" jsonschema:"task specification"`
@@ -57,6 +58,11 @@ type RunOutput struct {
 	ChangedFiles     []string   `json:"changed_files,omitempty"`
 	ExecutionResults []string   `json:"execution_results,omitempty"`
 	Warnings         []string   `json:"warnings,omitempty"`
+	PiModel          string     `json:"pi_model,omitempty"`
+	PiExitStatus     string     `json:"pi_exit_status,omitempty"`
+	RepairCycleCount int        `json:"repair_cycle_count,omitempty"`
+	TestCommandCount int        `json:"test_command_count,omitempty"`
+	ToolCallCount    int        `json:"tool_call_count,omitempty"`
 }
 
 type agentRunner interface {
@@ -67,10 +73,12 @@ type fileReader interface {
 	ReadFile(string) ([]byte, error)
 }
 
-func registerRunTool(server *sdkmcp.Server, runner agentRunner, reader fileReader, logger *slog.Logger) {
+type piRunner interface{ UsesPi(agent.Role) bool }
+
+func registerRunTool(server *sdkmcp.Server, runner agentRunner, reader fileReader, cfg config.Config, logger *slog.Logger) {
 	sdkmcp.AddTool(server, &sdkmcp.Tool{
 		Name:        "local_agent_run",
-		Description: "Run an independent coder, reviewer, tester, or fixer using the configured Direct LLM backend. The result is a proposal; Codex applies artifacts and runs tests.",
+		Description: "Run an independent coder, reviewer, tester, or fixer. Pi coder/fixer tasks use an isolated temporary worktree; Direct results are proposals.",
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, input RunInput) (*sdkmcp.CallToolResult, RunOutput, error) {
 		started, requestID := time.Now(), newRequestID()
 		output := executeRun(ctx, runner, reader, input)
@@ -86,6 +94,15 @@ func registerRunTool(server *sdkmcp.Server, runner agentRunner, reader fileReade
 			"role", input.Role, "agent", input.Role, "request_id", requestID,
 			"backend", backend, "duration", time.Since(started),
 			"status", output.Status, "result", output.Status, "error_type", errorType)
+		if backend == "pi" {
+			cleanupStatus := "success"
+			for _, warning := range output.Warnings {
+				if strings.Contains(warning, "WorktreeCleanupError") {
+					cleanupStatus = "failed"
+				}
+			}
+			logger.InfoContext(ctx, "Pi agent execution metrics", "request_id", requestID, "role", input.Role, "backend", "pi", "model", output.PiModel, "process_exit_status", output.PiExitStatus, "changed_files_count", len(output.ChangedFiles), "repair_cycle_count", output.RepairCycleCount, "test_command_count", output.TestCommandCount, "tool_call_count", output.ToolCallCount, "cleanup_result", cleanupStatus, "execution_result", output.Status, "error_type", errorType)
+		}
 		return nil, output, nil
 	})
 }
@@ -96,12 +113,27 @@ func executeRun(ctx context.Context, runner agentRunner, reader fileReader, inpu
 		return failedOutput(input.Role, err)
 	}
 	files := make([]agent.File, 0, len(input.Files))
+	isPi := false
+	if selector, ok := runner.(piRunner); ok {
+		isPi = selector.UsesPi(role)
+	}
 	for _, path := range input.Files {
-		content, err := reader.ReadFile(path)
-		if err != nil {
-			return failedOutput(input.Role, err)
+		if isPi {
+			validator, ok := reader.(interface{ ValidateOverlayPath(string) error })
+			if !ok {
+				return failedOutput(input.Role, fmt.Errorf("PiBackendError: reader cannot validate starting paths"))
+			}
+			if err := validator.ValidateOverlayPath(path); err != nil {
+				return failedOutput(input.Role, err)
+			}
+			files = append(files, agent.File{Path: path})
+		} else {
+			content, err := reader.ReadFile(path)
+			if err != nil {
+				return failedOutput(input.Role, err)
+			}
+			files = append(files, agent.File{Path: path, Content: string(content)})
 		}
-		files = append(files, agent.File{Path: path, Content: string(content)})
 	}
 
 	raw, err := runner.Run(ctx, agent.PromptInput{Role: role, Task: input.Task,
@@ -109,14 +141,48 @@ func executeRun(ctx context.Context, runner agentRunner, reader fileReader, inpu
 	if err != nil {
 		return failedOutput(input.Role, err)
 	}
-	output, err := parseRunOutput(raw, role)
+	var output RunOutput
+	if isPi {
+		output, err = parsePiRunOutput(raw, role)
+	} else {
+		output, err = parseRunOutput(raw, role)
+	}
 	if err != nil {
 		return failedOutput(input.Role, err)
+	}
+	if output.Status == "error" {
+		return output
 	}
 	if output.Backend == "" {
 		output.Backend = "direct"
 	}
 	return output
+}
+
+func parsePiRunOutput(raw string, expectedRole agent.Role) (RunOutput, error) {
+	decoder := json.NewDecoder(bytes.NewBufferString(raw))
+	decoder.DisallowUnknownFields()
+	var output RunOutput
+	if err := decoder.Decode(&output); err != nil {
+		return RunOutput{}, fmt.Errorf("PiBackendError: decode internal result: %w", err)
+	}
+	if output.Role != string(expectedRole) || output.Backend != "pi" || strings.TrimSpace(output.Summary) == "" {
+		return RunOutput{}, responseValidationError("invalid Pi backend result")
+	}
+	if output.Status != "success" && output.Status != "error" {
+		return RunOutput{}, responseValidationError("invalid Pi status %q", output.Status)
+	}
+	if output.Status == "error" && output.Error == nil {
+		return RunOutput{}, responseValidationError("Pi error result has no error details")
+	}
+	output.Artifacts = []Artifact{}
+	output.Findings = nonNil(output.Findings)
+	output.Risks = nonNil(output.Risks)
+	output.Notes = nonNil(output.Notes)
+	output.ChangedFiles = nonNil(output.ChangedFiles)
+	output.ExecutionResults = nonNil(output.ExecutionResults)
+	output.Warnings = nonNil(output.Warnings)
+	return output, nil
 }
 
 func parseRunOutput(raw string, expectedRole agent.Role) (RunOutput, error) {

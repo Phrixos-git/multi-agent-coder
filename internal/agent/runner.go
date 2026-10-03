@@ -46,3 +46,6 @@ func (r *Runner) Run(ctx context.Context, input PromptInput) (string, error) {
 	}
 	return b.Run(ctx, input)
 }
+
+// UsesPi reports whether the selected role backend is the in-place Pi harness.
+func (r *Runner) UsesPi(role Role) bool { _, ok := r.backends[role].(*PiBackend); return ok }

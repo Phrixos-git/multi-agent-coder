@@ -14,10 +14,11 @@
 ## 責務と権限の境界
 
 - Codexが要求分析、設計判断、タスク分割、ファイル変更、Shell実行、テスト実行、統合判断、最終承認を担当する。
-- ローカルLLMはコード候補、レビュー結果、テスト案、修正案を返す補助作業者として扱う。
-- ローカルLLMにファイル書き込み権限を与えない。ローカルLLMの成果物はMCPレスポンスとして受け取り、変更の適用はCodexが行う。
-- ローカルLLMにShell実行権限を与えない。テストやその他のコマンド実行はCodexが行う。
-- ローカルLLMによるGit操作を許可しない。
+- Direct BackendのLocal LLMはコード候補、レビュー結果、テスト案、修正案を返す補助作業者として扱う。Pi Coder/Fixer Backendは設計で定めるtemporary worktree内で実装・修正とテストを実行する。
+- Direct BackendのLocal LLMにはファイル書き込み・Shell権限を与えない。Pi Coder/Fixer Backendのみ、multi-agent-coderが作成したtemporary worktree内でread/edit/write/bashとテスト実行を許可する。
+- PiはMain Working Treeを編集してはならない。WorktreeはRepository編集の隔離であり、OS Sandboxではない。
+- Git history操作およびworktree lifecycleはmulti-agent-coderが担当し、Piによるcommit/push/rebase/reset/clean/branch切替/worktree操作を禁止する。
+- Direct Backendの成果物はMCPレスポンスとして受け取り、変更の適用はCodexが行う。Pi Backendの変更はworktreeからMACが回収する。
 - ReviewerにはCoderの会話履歴を渡さず、設計書で定めた独立コンテキストを維持する。
 - 無制限のRetryやAgent loopを実装しない。上限は`docs/DESIGN.md`に従う。
 

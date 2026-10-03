@@ -37,6 +37,14 @@ type LLMConfig struct {
 
 // Config contains process configuration loaded from MAC_* environment variables.
 type Config struct {
+	CoderBackend       string
+	FixerBackend       string
+	PiExecutable       string
+	PiProvider         string
+	PiModel            string
+	PiAgentDir         string
+	PiRPCArgs          string
+	PiTimeout          time.Duration
 	MainLLM            LLMConfig
 	CodingLLM          LLMConfig
 	LLMMaxTokens       int
@@ -52,6 +60,10 @@ type Config struct {
 
 // Load reads and validates configuration from the environment.
 func Load() (Config, error) {
+	piTimeout, err := parseDuration("MAC_PI_TIMEOUT", 0)
+	if err != nil {
+		return Config{}, err
+	}
 	repositoryRoot := strings.TrimSpace(os.Getenv("MAC_REPOSITORY_ROOT"))
 	if repositoryRoot == "" {
 		var err error
@@ -94,6 +106,14 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	cfg := Config{
+		CoderBackend: strings.ToLower(envOrDefault("MAC_CODER_BACKEND", "direct")),
+		FixerBackend: strings.ToLower(envOrDefault("MAC_FIXER_BACKEND", "direct")),
+		PiExecutable: envOrDefault("MAC_PI_EXECUTABLE", "pi"),
+		PiProvider:   envOrDefault("MAC_PI_PROVIDER", "local-qwen"),
+		PiModel:      envOrDefault("MAC_PI_MODEL", "qwen"),
+		PiAgentDir:   strings.TrimSpace(os.Getenv("MAC_PI_AGENT_DIR")),
+		PiRPCArgs:    strings.TrimSpace(os.Getenv("MAC_PI_RPC_ARGS")),
+		PiTimeout:    piTimeout,
 		MainLLM: LLMConfig{
 			BaseURL: envOrDefault("MAC_LLM_BASE_URL", defaultLLMBaseURL),
 			Model:   envOrDefault("MAC_LLM_MODEL", defaultLLMModel), Timeout: timeout,
@@ -119,6 +139,25 @@ func Load() (Config, error) {
 }
 
 func (c *Config) validate() error {
+	if c.CoderBackend != "direct" && c.CoderBackend != "pi" {
+		return fmt.Errorf("ConfigError: MAC_CODER_BACKEND must be direct or pi")
+	}
+	if c.FixerBackend != "direct" && c.FixerBackend != "pi" {
+		return fmt.Errorf("ConfigError: MAC_FIXER_BACKEND must be direct or pi")
+	}
+	if strings.TrimSpace(c.PiExecutable) == "" || strings.TrimSpace(c.PiProvider) == "" || strings.TrimSpace(c.PiModel) == "" {
+		return fmt.Errorf("ConfigError: Pi executable, provider, and model must not be empty")
+	}
+	for _, arg := range strings.Fields(c.PiRPCArgs) {
+		for _, protected := range []string{"--mode", "--tools", "-t", "--exclude-tools", "-xt", "--no-tools", "-nt", "--no-builtin-tools", "-nbt", "--no-extensions", "-ne", "--extension", "-e", "--provider", "--model", "--session", "--session-id", "--session-dir", "--continue", "-c", "--resume", "-r", "--fork"} {
+			if arg == protected || strings.HasPrefix(arg, protected+"=") {
+				return fmt.Errorf("ConfigError: MAC_PI_RPC_ARGS cannot override protected Pi option %s", protected)
+			}
+		}
+	}
+	if c.PiTimeout < 0 {
+		return fmt.Errorf("ConfigError: MAC_PI_TIMEOUT must be zero (unlimited) or greater")
+	}
 	for _, backend := range []struct {
 		name string
 		cfg  LLMConfig

@@ -9,6 +9,9 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -21,10 +24,20 @@ type healthInput struct{}
 
 // HealthOutput is the structured result of local_agent_health.
 type HealthOutput struct {
-	Status    string    `json:"status" jsonschema:"MCP server status"`
-	LLM       string    `json:"llm" jsonschema:"legacy main LLM status"`
-	MainLLM   LLMHealth `json:"main_llm" jsonschema:"main LLM connectivity"`
-	CodingLLM LLMHealth `json:"coding_llm" jsonschema:"coding LLM connectivity"`
+	Status       string    `json:"status" jsonschema:"MCP server status"`
+	CoderBackend string    `json:"coder_backend" jsonschema:"coder backend routing"`
+	FixerBackend string    `json:"fixer_backend" jsonschema:"fixer backend routing"`
+	LLM          string    `json:"llm" jsonschema:"legacy main LLM status"`
+	MainLLM      LLMHealth `json:"main_llm" jsonschema:"main LLM connectivity"`
+	CodingLLM    LLMHealth `json:"coding_llm" jsonschema:"coding LLM connectivity"`
+	Pi           *PiHealth `json:"pi,omitempty" jsonschema:"shared Pi readiness"`
+}
+
+type PiHealth struct {
+	Status     string `json:"status"`
+	Executable string `json:"executable"`
+	AgentDir   string `json:"agent_dir"`
+	Model      string `json:"model"`
 }
 
 type LLMHealth struct {
@@ -36,16 +49,25 @@ type LLMHealth struct {
 func registerHealthTool(server *sdkmcp.Server, cfg config.Config, logger *slog.Logger) {
 	sdkmcp.AddTool(server, &sdkmcp.Tool{
 		Name:        "local_agent_health",
-		Description: "Report Main LLM and Coding LLM health independently.",
+		Description: "Report coder/fixer backend routing and Main LLM, Coding LLM, and selected shared Pi readiness.",
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, _ healthInput) (*sdkmcp.CallToolResult, HealthOutput, error) {
 		started := time.Now()
 		requestID := newRequestID()
 		output := HealthOutput{
-			Status:    "ok",
-			MainLLM:   probeLLM(ctx, cfg.MainLLM),
-			CodingLLM: probeLLM(ctx, cfg.CodingLLM),
+			Status:       "ok",
+			CoderBackend: cfg.CoderBackend,
+			FixerBackend: cfg.FixerBackend,
+			MainLLM:      probeLLM(ctx, cfg.MainLLM),
+			CodingLLM:    probeLLM(ctx, cfg.CodingLLM),
 		}
 		output.LLM = output.MainLLM.Status
+		if cfg.CoderBackend == "pi" || cfg.FixerBackend == "pi" {
+			piHealth := probePi(cfg)
+			output.Pi = &piHealth
+			if output.Pi.Status != "available" {
+				output.Status = "degraded"
+			}
+		}
 		if output.MainLLM.Status != "available" || output.CodingLLM.Status != "available" {
 			output.Status = "degraded"
 		}
@@ -57,6 +79,31 @@ func registerHealthTool(server *sdkmcp.Server, cfg config.Config, logger *slog.L
 		)
 		return nil, output, nil
 	})
+}
+
+func probePi(cfg config.Config) PiHealth {
+	result := PiHealth{Status: "failed", Executable: cfg.PiExecutable, AgentDir: cfg.PiAgentDir, Model: cfg.PiModel}
+	if _, err := exec.LookPath(cfg.PiExecutable); err != nil {
+		result.Status = "unavailable"
+		return result
+	}
+	dir := cfg.PiAgentDir
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			result.Status = "unavailable"
+			return result
+		}
+		dir = filepath.Join(home, ".pi", "agent")
+		result.AgentDir = dir
+	}
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() {
+		result.Status = "unavailable"
+		return result
+	}
+	result.Status = "available"
+	return result
 }
 
 // probeLLM keeps health calls short even when generation timeout is long.

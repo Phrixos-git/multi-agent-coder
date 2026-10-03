@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/arietis/multi-agent-coder/internal/config"
 	"github.com/arietis/multi-agent-coder/internal/llm"
 )
 
@@ -74,6 +75,17 @@ func TestRunnerPropagatesBackendError(t *testing.T) {
 	_, err := runner.Run(context.Background(), PromptInput{Role: RoleCoder, Task: "implement"})
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("Run() error = %v, want wrapped backend error", err)
+	}
+}
+
+func TestRoleRoutingUsesPiForCoderOnly(t *testing.T) {
+	direct := &recordingBackend{}
+	runner := NewRunnerWithRoleBackends(map[Role]Backend{RoleCoder: NewPiBackend(config.Config{}), RoleReviewer: direct, RoleTester: direct, RoleFixer: direct})
+	for _, role := range []Role{RoleCoder, RoleReviewer, RoleTester, RoleFixer} {
+		want := role == RoleCoder
+		if got := runner.UsesPi(role); got != want {
+			t.Errorf("UsesPi(%s)=%v, want %v", role, got, want)
+		}
 	}
 }
 

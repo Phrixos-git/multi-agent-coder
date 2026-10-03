@@ -56,19 +56,19 @@ Codexですべてのコードを生成するのではなく、
 
 # 3. 非目標
 
-Version 1では以下は実装対象外とする。
+以下は実装対象外とする。
 
 - 複数GPUへの分散
 - ローカルLLMによる直接的なGit操作
-- ローカルLLMによる任意Shellコマンド実行
-- ローカルLLMによる直接的なファイル変更
+- Direct Backendによる任意Shellコマンド実行
+- Direct Backendによる直接的なファイル変更
 - 自律的な無制限再試行
 - 複数Agentによる同一ファイルの並列編集
 - 独自ベクトルDB
 - RAG
 - Web検索
 
-これらは必要になった段階でVersion 2以降へ追加する。
+Pi Coder/Fixer Backendに限り、一時Git worktree内でのファイル編集とbash実行を許可する。OS SandboxではなくRepository編集の隔離であり、Piはサーバー実行ユーザーのOS権限を持つ。
 
 Role別Backend routingはMain LLMとCoding LLMの2つの手動起動済みserverを利用する。自動起動・停止や複数Coding Modelからの自動選択は行わない。
 
@@ -102,16 +102,17 @@ Role別Backend routingはMain LLMとCoding LLMの2つの手動起動済みserver
 │ ・Role選択               │
 │ ・Prompt生成             │
 │ ・Context生成            │
-│ ・LLM API Client         │
-│ ・Response検証           │
+│ ・Role別Backend routing  │
+│ ・LLM / Pi RPC管理       │
+│ ・Worktreeと差分回収     │
 └─────────────┬────────────┘
               │ Role別Backend selection
               ▼
 ┌──────────────────────────┐
-│ coder/fixer: Direct       │
-│          -> Coding LLM    │
+│ coder: Direct or Pi       │
+│ fixer: Direct or Pi       │
 │ reviewer/tester: Direct   │
-│          -> Main LLM      │
+│              -> Main LLM  │
 └──────────────────────────┘
 ```
 
@@ -321,6 +322,8 @@ Codex
    Complete
 ```
 
+`MAC_CODER_BACKEND`と`MAC_FIXER_BACKEND`は独立して`direct`または`pi`を選べる。Piの設定はCoder/Fixerで共有する。Piを選んだ呼び出しは一時worktree上の新規RPC Sessionで実行し、Reviewer/Testerは常にDirectを使う。
+
 ---
 
 # 8. MCP Server
@@ -448,7 +451,7 @@ Reviewerの場合：
 
 # 11. ファイルアクセス
 
-ローカルLLMへ自由なファイルアクセスを与えない。
+Direct Backendに自由なファイルアクセスを与えない。Pi Coder/FixerではMACが検証したstarting file pathsを渡し、Piはtemporary worktree内のファイルを必要に応じて読む。Fixerは`files[]`対象だけMain Working Treeからoverlayし、overlay直後をBaselineとしてBaseline→FinalのPatchだけ返す。
 
 Codexから、
 
@@ -484,7 +487,7 @@ filepath.Rel()
 
 # 12. ファイル変更ポリシー
 
-Version 1ではローカルLLM自身はファイルを書き換えない。
+Direct BackendではローカルLLM自身はファイルを書き換えない。
 
 ```text
 Qwen
@@ -512,7 +515,7 @@ File Update
 
 # 13. Shell実行
 
-ローカルLLMにShell権限を与えない。
+Direct BackendにはShell権限を与えない。Pi Coder/Fixer Backendのみ一時worktree内でbashを許可し、Git履歴操作・branch切替・worktree管理は禁止する。
 
 例えば、
 
@@ -522,7 +525,7 @@ npm test
 cargo test
 ```
 
-などはCodex自身が実行する。
+などはCodex自身が実行する。Pi Coder/Fixer Backendでは指定した一時worktree内でPiがtargeted testと広域テストを実行する。
 
 ローカルLLMは、
 
@@ -1089,7 +1092,7 @@ E2E
 
 [ ] fixerへ修正案を依頼できる
 
-[ ] Qwen自身はRepositoryを書き換えない
+[ ] Direct BackendのQwenはRepositoryを書き換えない
 
 [ ] Repository Root外を読み込めない
 
@@ -1104,26 +1107,26 @@ E2E
 
 ---
 
-# 31. Role別Direct backend routing
+# 31. Role別Backend routing
 
-すべてのRoleはOpenAI互換APIを使うDirect LLM backendで処理する。CoderとFixerはCoding LLM、ReviewerとTesterはMain LLMを使用する。
+既定は全Role Directである。`MAC_CODER_BACKEND`と`MAC_FIXER_BACKEND`は独立して`direct`/`pi`を指定できる。ReviewerとTesterはMain LLMのDirect Backendを使う。Pi設定はCoder/Fixerで共有し、どちらかがPiならPi readinessを一度確認する。Piを起動できない場合はエラーとし、Directへfallbackしない。
 
 ```text
 local_agent_run
-  ├─ coder, fixer    -> DirectBackend / Coding LLM
+  ├─ coder            -> DirectBackend / Coding LLM or PiBackend / temporary worktree
+  ├─ fixer            -> DirectBackend / Coding LLM or PiBackend / overlay worktree
   └─ reviewer, tester -> DirectBackend / Main LLM
 ```
 
-Coder/FixerはJSON成果物を返し、実ファイルの適用とテスト実行はCodexが担当する。Direct backendはモデルにTool CallやShell/Git権限を与えない。
+Direct Coder/FixerはJSON成果物を返し、実ファイルの適用とテスト実行はCodexが担当する。Pi Coder/Fixerは1タスクにつき新規RPCプロセスを起動し、一時worktree上でread/bash/edit/writeとテストを行う。MACはGit状態からPatchとChangedFilesを回収し、Pi最終回答を成果物JSONとして解釈しない。Agent全体のPi timeoutは既定無制限だが、起動・health・通信idle・キャンセル処理には有限の制限を設ける。CoderはHEADから開始し、Fixerは`files[]`指定対象のMain Working Tree状態だけをoverlayする。Fixer Patchはoverlay後Baselineからの差分とする。
 
 ---
 
-# 31. Version 2候補
+# 31. 将来候補
 
 Version 1完成後に検討する。
 
 ```text
-Git Worktree
 並列Agent
 Agentごとのtemperature設定
 Task Graph
@@ -1153,16 +1156,14 @@ Local LLM
 
 RoleごとにBackendを解決し、System PromptとContextを分離する。Main/Codingの接続先は環境変数で指定し、LLM ClientはRoleによる接続先選択を行わない。
 
-Coder/FixerのCoding LLMへのDirect応答にはAgent JSON schemaを指定する。Reviewer/TesterのMain LLMには従来のJSON object形式を使う。JSONのdecodeとRole/Statusなどの検証は従来通りMCP層で行う。
+Direct Coder/FixerのCoding LLMへの応答にはAgent JSON schemaを指定する。Reviewer/TesterのMain LLMには従来のJSON object形式を使う。Pi Coder/FixerはJSON artifactを生成せず、MACがworktree状態からRunOutputを生成する。
 
-ローカルLLMは作業者に徹し、
+Codexは設計判断、Main Working Treeへの変更適用、最終レビュー、統合判断を担当する。Pi Coder/Fixerはtemporary worktree内の実装・修正とテストのみを担当する。
 
 ```text
-設計判断
-変更適用
-Shell実行
-テスト判定
-Git操作
+Piのworktree外の変更適用
+Git履歴操作
+最終テスト判定
 最終承認
 ```
 

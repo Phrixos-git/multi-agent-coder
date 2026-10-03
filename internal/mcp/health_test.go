@@ -6,12 +6,30 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/arietis/multi-agent-coder/internal/config"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+func TestProbePiRequiresExecutableAndAgentDirectory(t *testing.T) {
+	executable := filepath.Join(t.TempDir(), "pi")
+	if err := os.WriteFile(executable, []byte("#!/bin/sh\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	cfg := config.Config{CoderBackend: "pi", PiExecutable: executable, PiAgentDir: dir, PiModel: "qwen"}
+	if got := probePi(cfg); got.Status != "available" || got.Model != "qwen" {
+		t.Fatalf("Pi readiness = %+v", got)
+	}
+	cfg.PiAgentDir = filepath.Join(t.TempDir(), "missing")
+	if got := probePi(cfg); got.Status != "unavailable" {
+		t.Fatalf("missing Pi directory readiness = %+v", got)
+	}
+}
 
 func TestLocalAgentHealth(t *testing.T) {
 	main := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

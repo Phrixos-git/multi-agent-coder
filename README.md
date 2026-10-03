@@ -1,6 +1,6 @@
 # multi-agent-coder
 
-ローカルLLMを coder / reviewer / tester / fixer として利用するSTDIO MCP Serverです。既定ではすべてのロールがllama.cppを直接呼び出します。
+ローカルLLMを coder / reviewer / tester / fixer として利用するSTDIO MCP Serverです。既定ではすべてのロールがllama.cppを直接呼び出します。CoderとFixerはそれぞれ独立してPi Backendを選べます。
 
 ## E2E regression suite
 
@@ -18,11 +18,73 @@ cd /absolute/path/to/multi-agent-coder
 go build -o ./multi-agent-coder ./cmd/multi-agent-coder
 ```
 
-llama.cpp Serverは別途起動してください。標準構成ではCoder/FixerがCoding LLM（Qwen2.5-Coder-7B、`127.0.0.1:18082`）をDirectで使用し、Reviewer/TesterがMain LLM（Qwen3.8-27B、`127.0.0.1:8080`）をDirectで使用します。ポートとモデル名は環境変数から設定します。
+llama.cpp Serverは別途起動してください。標準構成ではCoder/FixerがCoding LLM（`127.0.0.1:18082`）をDirectで使用し、Reviewer/TesterがMain LLM（推奨Qwen3.8-27B、`127.0.0.1:8080`）をDirectで使用します。`MAC_CODER_BACKEND`と`MAC_FIXER_BACKEND`は個別に`direct`または`pi`を選べます。Reviewer/TesterはDirectのみです。Piが起動できない場合にDirectへfallbackしません。
 
 ## Agentの権限と成果物
 
-Codexは必要なTask、関連ファイル、RequirementsだけをAgentへ渡します。Local LLMは受け取った内容から実装案・レビュー・テスト案・修正案をJSON成果物として返し、Repositoryを直接読み書きしません。Agentにread/edit/write tool、Shell、Git操作は与えません。成果物の選択とRepositoryへの適用、Shellやテストの実行、Git操作、最終判断はCodexが行います。Coderへの1回の依頼は1つの明確な目的に絞り、大きな作業は小さなTaskに分割してください。
+Direct Backendは従来どおりread-onlyでJSON成果物を返します。Pi Coder/Fixer Backendは一時Git worktree内でread/bash/edit/writeとテストを行い、MACがGit差分をPatchとして回収します。Coder worktreeはHEADから作成します。FixerはMain Working Tree全体ではなく`files[]`指定対象だけ現在状態をoverlayし、overlay後BaselineからFinalまでの差分だけを返します。Piへ`files`の本文は渡さず、starting file pathとして伝えます。Piが変更していない既存dirtyファイルはPatch/ChangedFilesに含めません。WorktreeはRepository編集の隔離であり、OS Sandboxではありません。Piの処理は1 Taskごとに新規プロセス/Sessionです。
+
+### Pi Coder/Fixerの設定
+
+Piは任意機能です。Coder/Fixerが共通のPi設定を使います。llama.cppの`/v1/models`に表示されるモデルIDに合わせて、利用者側でPi Agent Directoryの`models.json`を設定してください。モデルIDはMAC側にハードコードしません。
+
+```text
+MAC_PI_AGENT_DIR=/home/user/.pi/mac-agent
+```
+
+MACはPi子プロセスの`PI_CODING_AGENT_DIR`へこの値を渡します。`APPEND_SYSTEM.md`はPiが標準で読み込む追加System Prompt用ファイルです。
+
+`models.json`のOpenAI互換provider例（実際のmodel IDは`/v1/models`に合わせる）：
+
+```json
+{
+  "providers": {
+    "local-qwen": {
+      "baseUrl": "http://127.0.0.1:8080/v1",
+      "api": "openai-completions",
+      "apiKey": "local",
+      "models": [{"id": "<llama.cpp-model-id>", "name": "Qwen3.8-27B", "contextWindow": 65536, "maxTokens": 8192}]
+    }
+  }
+}
+```
+
+MACはPi起動時に`PI_CODING_AGENT_DIR`へ`MAC_PI_AGENT_DIR`を設定します。Pi設定ファイルはMACが生成・変更しません。利用者が用意する`settings.json`の推奨値はProvider `local-qwen`、Model `qwen`、Thinking `medium`、budget `2048`、tools `read,bash,edit,write`、session persistence/extensions disabled、provider retry `0`、agent retry `1`、HTTP idle timeout `300000ms`、compaction reserve `16384`/keep recent `12000`です。Piのバージョンに合わせて設定schemaを確認してください。
+
+```json
+{
+  "defaultProvider": "local-qwen", "defaultModel": "qwen", "defaultThinkingLevel": "medium",
+  "thinkingBudgets": {"minimal": 256, "low": 1024, "medium": 2048, "high": 4096, "xhigh": 8192},
+  "defaultTools": ["read", "bash", "edit", "write"],
+  "retry": {"enabled": true, "maxRetries": 1, "provider": {"maxRetries": 0}},
+  "httpIdleTimeoutMs": 300000,
+  "compaction": {"enabled": true, "reserveTokens": 16384, "keepRecentTokens": 12000}
+}
+```
+
+Pi起動例：
+
+```bash
+codex mcp add multi-agent-coder \
+  --env MAC_CODER_BACKEND=pi \
+  --env MAC_FIXER_BACKEND=pi \
+  --env MAC_PI_EXECUTABLE=/absolute/path/to/pi \
+  --env MAC_PI_PROVIDER=local-qwen \
+  --env MAC_PI_MODEL=qwen \
+  --env MAC_PI_AGENT_DIR=/home/user/.pi/mac-agent \
+  --env MAC_PI_RPC_ARGS= \
+  --env MAC_PI_TIMEOUT=0 \
+  --env MAC_LLM_BASE_URL=http://127.0.0.1:8080 \
+  --env MAC_LLM_MODEL=qwen3.8-27b \
+  --env MAC_LLM_TIMEOUT=180s \
+  --env MAC_CODING_LLM_BASE_URL=http://127.0.0.1:18082 \
+  --env MAC_CODING_LLM_MODEL=qwen-coder \
+  --env MAC_CODING_LLM_TIMEOUT=180s \
+  --env MAC_REPOSITORY_ROOT=/absolute/path/to/target-repository \
+  -- /absolute/path/to/multi-agent-coder/multi-agent-coder
+```
+
+`MAC_PI_TIMEOUT=0`はPi Agent全体のHard Timeoutなしを意味します。MCP Context cancellation、Pi startup 15秒、RPC idle 300秒、shutdown grace 3秒は維持します。Piは`agent_settled`まで待ちます。PiはGit操作を行わず、PatchはworktreeのGit状態からMACが作ります。
 
 ## CodexへMCP Serverを追加
 
@@ -90,6 +152,14 @@ Server本体が読み取る環境変数はすべて省略可能で、省略時�
 | `MAC_LLM_REASONING_EFFORT` | Direct LLMリクエストのreasoning effort | `none` |
 | `MAC_LLM_TEMPERATURE` | Direct LLMリクエストのtemperature | `0.2` |
 | `MAC_LOG_LEVEL` | Serverのログレベル | `info` |
+| `MAC_CODER_BACKEND` | Coder backend (`direct` / `pi`) | `direct` |
+| `MAC_FIXER_BACKEND` | Fixer backend (`direct` / `pi`) | `direct` |
+| `MAC_PI_EXECUTABLE` | Pi実行ファイルまたはコマンド名 | `pi` |
+| `MAC_PI_PROVIDER` | Pi provider | `local-qwen` |
+| `MAC_PI_MODEL` | Pi model selector | `qwen` |
+| `MAC_PI_AGENT_DIR` | Pi専用Agent Directory（空ならPi標準値） | 空 |
+| `MAC_PI_RPC_ARGS` | 追加RPC引数（空白区切り） | 空 |
+| `MAC_PI_TIMEOUT` | Pi Agent全体Timeout。`0`は無制限 | `0` |
 
 URLには絶対HTTP(S) URL、Timeoutには正のGo duration、token上限には1以上の整数を指定します。`MAC_LLM_TEMPERATURE` は0以上2以下、`MAC_LOG_LEVEL` は `debug`、`info`、`warn`、`error` のいずれかです。不正な値の場合、Serverは設定エラーとして起動を中止します。
 

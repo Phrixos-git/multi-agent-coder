@@ -36,6 +36,13 @@ func NewServer(cfg config.Config, logger *slog.Logger) (*Server, error) {
 		}
 		backends[role] = direct
 	}
+	piBackend := agent.NewPiBackend(cfg)
+	if cfg.CoderBackend == "pi" {
+		backends[agent.RoleCoder] = piBackend
+	}
+	if cfg.FixerBackend == "pi" {
+		backends[agent.RoleFixer] = piBackend
+	}
 	return newServerWithBackends(cfg, logger, backends)
 }
 
@@ -73,7 +80,7 @@ func newServerWithBackends(cfg config.Config, logger *slog.Logger, backends map[
 	runner := agent.NewRunnerWithRoleBackends(backends)
 	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: serverName, Version: serverVersion}, nil)
 	registerHealthTool(server, cfg, logger)
-	registerRunTool(server, runner, reader, logger)
+	registerRunTool(server, runner, reader, cfg, logger)
 	return &Server{server: server}, nil
 }
 
