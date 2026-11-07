@@ -975,6 +975,16 @@ Mock llama-server
 
 ## Manual E2E
 
+実装能力の追加検証には`TestLiveImplementationE2E`を使用する。
+`MAC_LIVE_IMPLEMENTATION_E2E=1`で明示的に有効化し、Coder/FixerはPiを使う。
+テスト専用の一時Git Repositoryで整数区間の正規化を課題とする。
+Coderには契約書・先行テスト・未実装の関数を渡し、Fixerには隣接区間を
+結合しない実装を`files[]`経由でoverlayする。各呼び出しは独立した1課題とする。
+返却Patchをテスト用Repositoryだけへ適用し、境界値・入力非破壊・有限の
+組み合わせテストを実行する。通常の`go test ./...`では実モデルを呼ばない。
+既知のPatch末尾LF欠落は明示的に記録し、この実装能力テストでは末尾LFを
+補って検証する。無加工Patchの適用成功を示すテストとは区別する。
+
 ```text
 Codex
  ↓
@@ -982,7 +992,7 @@ MCP
  ↓
 multi-agent-coder
  ↓
-coder/fixer → Direct → Coding LLM
+coder/fixer → Direct → Coding LLM または Pi → temporary worktree
 reviewer/tester → Direct → Main LLM
 ```
 

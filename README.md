@@ -175,6 +175,12 @@ MAC_LIVE_ROLE_E2E=1 go test -v ./internal/mcp -run '^TestLiveRoleRouting$' -coun
 
 実行前に `MAC_LLM_BASE_URL`、`MAC_CODING_LLM_BASE_URL` と必要に応じて各モデル名を現在のローカル構成に合わせてexportしてください。
 
+Pi Coder/Fixerの実装能力を確認する追加E2Eもあります。整数区間の正規化を課題とし、先行テスト、入力非破壊、整数境界、784通りの組み合わせを検証します。`MAC_CODER_BACKEND=pi`、`MAC_FIXER_BACKEND=pi`とPi設定をexportして実行してください。テスト専用の一時RepositoryだけにPatchを適用します。既知の末尾LF欠落は記録したうえで補完するため、無加工Patchの適用可否とは別の検証です。
+
+```bash
+MAC_LIVE_IMPLEMENTATION_E2E=1 go test -v ./internal/mcp -run '^TestLiveImplementationE2E$' -count=1 -timeout=15m
+```
+
 ## max_tokens設定
 
 Agent実行時の `max_tokens` はRole別の環境変数から取得します。

@@ -2,7 +2,7 @@
 
 ## Scope
 
-The repository E2E checks separate three kinds of checks:
+The repository E2E checks separate four kinds of checks:
 
 1. Live Codex-to-MCP acceptance calls verify that Codex invokes
    `multi-agent-coder` and does not silently replace a failed MCP call.
@@ -10,10 +10,46 @@ The repository E2E checks separate three kinds of checks:
    response classification with fixed candidates and mock HTTP responses.
 3. A live Go integration test verifies Main LLM and Coding LLM role routing
    against the locally configured services.
+4. An optional live implementation challenge verifies Pi-generated interval
+   normalization code and repairs against executable acceptance tests.
 
-The local agents never receive shell or Git authority. Codex applies accepted
-artifacts and executes tests. Coder and fixer return JSON artifacts through the
-Coding LLM route; reviewer and tester use the Main LLM route.
+Direct agents return JSON proposals and have no shell or Git authority.
+Pi coder/fixer agents may edit files and run tests inside temporary worktrees;
+MAC manages Git and collects patches. Reviewer/tester always use the Main LLM
+Direct route. Codex controls application to the main working tree.
+
+## Live implementation challenge
+
+From the repository root, with the usual `MAC_*` variables exported and both
+`MAC_CODER_BACKEND=pi` and `MAC_FIXER_BACKEND=pi`, run:
+
+```text
+MAC_LIVE_IMPLEMENTATION_E2E=1 go test -v ./internal/mcp -run '^TestLiveImplementationE2E$' -count=1 -timeout=15m
+```
+
+This optional test uses the current Go source and in-memory MCP transport. It
+does not register or start the installed STDIO binary. It replaces
+`MAC_REPOSITORY_ROOT` with a disposable Git repository containing only a small
+interval-normalization fixture. It never applies agent changes to this checkout.
+
+The fixture contract and tests are supplied before implementation. Coder
+implements `Normalize` from a stub. In a separate repository, fixer receives a
+seeded implementation through a dirty `intervals.go` overlay and repairs its
+missing adjacent-interval merge. The baseline tests must fail before each call;
+after patch application every contract test must pass. Only `intervals.go` may
+change; agents cannot pass by weakening the acceptance tests.
+
+Acceptance covers empty input, singleton and unordered intervals, overlaps,
+adjacency, nesting, duplicates, negative endpoints, invalid reversed intervals,
+input immutability on success and failure, and minimum/maximum machine integers.
+A finite exhaustive test compares all pairs of small intervals with a set-based
+oracle, and checks canonical ordering and idempotence. The implementation uses
+only the Go standard library and must not enumerate every integer in a range.
+
+The test logs whether each returned patch has a final LF. Until the existing
+patch-LF defect is fixed, it adds one LF before `git apply --check` and applying
+the patch. Success proves implementation behavior after this normalization;
+it does not prove that the raw returned patch is directly applicable.
 
 ## Commands
 
