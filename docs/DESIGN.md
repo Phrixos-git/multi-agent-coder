@@ -853,6 +853,8 @@ Prompt全文およびソースコード全文はDefaultではログへ記録し�
 
 CodexからSTDIO Serverを起動する際は、`scripts/run-mcp-server` に `qwen` または `strata` を渡す。ラッパーはRepository Rootにある信頼済みの `.env.qwen` または `.env.strata` をBashで読み込み、設定を子プロセスへ渡す。Repository Rootの実行ファイル `multi-agent-coder` を優先し、実行できない場合は `bin/multi-agent-coder` を探す。Repository Rootの `run-mcp-server` からも同じラッパーを起動できる。
 
+`scripts/run-mcp-server` は省略可能な第2引数で呼び出し元（`codex` または `claude-code`、既定 `codex`）を受け取る。ラッパーは `.env.<profile>` を読み込んだ後で `MAC_ORCHESTRATOR` に第2引数の値をexportする。不正な第2引数、または3個以上の引数ではUsageをstderrに出して終了コード2で終了する。詳細は「Claude Code対応」の節を参照する。
+
 ラッパーはstderrを親プロセスへ転送し、`logs/multi-agent-coder-<profile>-YYYY-MM-DD.log` に保存する。ラッパー自体はstdoutに出力しない。ログのディレクトリは `MAC_LOG_DIR` で変更できる。
 
 ---
@@ -1187,3 +1189,63 @@ Git履歴操作
 はCodexが担当する。
 
 これによりローカルLLMの誤操作によるRepository破壊を抑えつつ、Codexの高度な判断能力とローカルLLMの計算資源を組み合わせる。
+
+---
+
+# 33. Claude Code対応
+
+Codexに加えて、Claude CodeからもMCP Serverとして呼び出せるようにする。Codexからの登録手順と挙動は変えない。
+
+## Orchestratorの選択
+
+呼び出し元は `MAC_ORCHESTRATOR`（`codex` | `claude-code`）で表す。未設定時は `codex` とし、従来とまったく同じ挙動にする。
+
+`.env.qwen` / `.env.strata` はCodexとClaude Codeで共有する。`.env` はBashの `source` で読み込まれ既存の環境変数を上書きするため、呼び出し元は `.env` ではなく `scripts/run-mcp-server` の第2引数で渡す。ラッパーは `.env` の読み込み後に `MAC_ORCHESTRATOR` を設定し、`.env` の同名の行より起動引数を優先する。
+
+```text
+Codex:       scripts/run-mcp-server qwen
+Claude Code: scripts/run-mcp-server qwen claude-code
+```
+
+`local_agent_health` は `orchestrator` フィールドで現在の値を返す。リクエストログにも `orchestrator` を記録する。
+
+## Configuration
+
+```text
+MAC_ORCHESTRATOR=codex
+MAC_CLAUDE_MAX_OUTPUT_CHARS=80000
+MAC_CLAUDE_TOOL_ERROR_FLAG=true
+```
+
+`MAC_CLAUDE_MAX_OUTPUT_CHARS` は0以上の整数（0は無制限）、`MAC_CLAUDE_TOOL_ERROR_FLAG` は `true` / `false` とする。`MAC_CLAUDE_*` はClaude Code専用の設定で、Codexから起動した場合は挙動に反映しない。ただし共有 `.env` の誤記をCodexからの起動時にも検出するため、`MAC_ORCHESTRATOR` の値に関係なく常に検証し、不正な値は `ConfigError` として起動を中止する。
+
+## Promptの切り替え
+
+`claude-code` の場合、Direct BackendのSystem Promptとして `prompts/claude-code/<role>.md` を使う。内容は `prompts/<role>.md` の「Codex」を「Claude Code」に置き換えたものであり、それ以外のルール、順序、文言は変えない。Codexとの比較評価のため差分を最小に保つ。
+
+User Messageの構造と `OUTPUT FORMAT` は両者で共通とする。Pi Backendの `buildPiPrompt` は呼び出し元に依存する文言を含まないため共通とする。
+
+## 出力制限
+
+Claude CodeはMCP Toolの出力量に上限を持つ（`MAX_MCP_OUTPUT_TOKENS`）。`claude-code` かつ `MAC_CLAUDE_MAX_OUTPUT_CHARS > 0` の場合、`local_agent_run` の `RunOutput` をJSONエンコードした文字数が上限を超えたら、`patch` と各 `artifacts[].content` を後ろから切り詰めて上限内に収める。
+
+- 各フィールドに共通の上限文字数を設け、全体が収まる最大の値を選ぶ。小さいフィールドはそのまま残り、大きいフィールドは均等に切り詰められる。
+- 切り詰めたフィールドごとに `warnings` へ `OutputTruncated: <field> truncated from N to M chars` を追加する。
+- 切り詰め後のPatchや成果物は適用できないため、タスクの分割を求める `OutputTruncated:` で始まるメッセージも `warnings` へ追加する。
+- `summary`、`findings`、`risks`、`notes`、`error`、`changed_files` は切り詰めない。これらだけで上限を超える場合は、その旨を `OutputTruncated:` の警告として追加し、上限を超えたまま返す。
+
+Orchestrator（Claude Code）は `OutputTruncated` を含む成果物を適用せず、タスクを分割して再依頼する。
+
+## isError
+
+`claude-code` かつ `MAC_CLAUDE_TOOL_ERROR_FLAG=true` の場合、`status` が `error` の `local_agent_run` 応答では、MCPの `CallToolResult.isError` を立てる。構造化出力（`structuredContent`）とテキストの `content` は、Codexの場合と同じ内容を返す。
+
+## 責務
+
+Claude Codeから作業する場合、本書でCodexが担当すると定めた要求分析、設計判断、タスク分割、ファイル変更、Shell実行、テスト実行、統合判断、最終承認は、Claude Codeが担当する。Direct Backendの成果物はClaude Codeが検証・適用し、テストもClaude Codeが実行する。Pi BackendのPatchはClaude Codeが内容を確認してから適用する。
+
+Claude Code用の指示は `CLAUDE.md`（`AGENTS.md` を取り込む）と `.claude/skills/multi-agent-coder-delegation/SKILL.md` に置く。
+
+## Codex挙動を変えない方針
+
+`codex`（未設定を含む）の場合、Prompt、`local_agent_run` の応答、`isError` の扱いを従来から変えない。追加はログと `local_agent_health` の `orchestrator` フィールドのみとする。既存の公開API、関数シグネチャ、環境変数、既定値、Codexからの登録手順は変えない。

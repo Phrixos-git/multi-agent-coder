@@ -125,3 +125,104 @@ source contents are not written to logs by default.
 The checked-in traces contain only fixed synthetic values or sanitized Codex
 events. A scenario failure prints its expected result, actual output, failed
 stage, and error type, then exits non-zero.
+
+## Claude Code acceptance
+
+These manual steps check the same acceptance points with Claude Code as the
+orchestrator. They use `claude -p` (non-interactive print mode) and do not
+change the Codex scenarios or scripts above. Run them from this directory.
+
+The launcher argument selects the orchestrator; the shared `.env.<profile>`
+file is reused unchanged:
+
+```text
+/absolute/path/to/multi-agent-coder/scripts/run-mcp-server qwen claude-code
+```
+
+For a reproducible run, put the server in a dedicated MCP config file (for
+example `/tmp/mac-claude-mcp.json`) and pass it with `--strict-mcp-config` so
+that user and project MCP settings are ignored:
+
+```json
+{
+  "mcpServers": {
+    "multi-agent-coder": {
+      "command": "/absolute/path/to/multi-agent-coder/scripts/run-mcp-server",
+      "args": ["qwen", "claude-code"]
+    }
+  }
+}
+```
+
+### CC-HEALTH: orchestrator identification
+
+```text
+claude -p --strict-mcp-config --mcp-config /tmp/mac-claude-mcp.json \
+  --allowedTools mcp__multi-agent-coder__local_agent_health \
+  --output-format stream-json --verbose \
+  'Call mcp__multi-agent-coder__local_agent_health once and print its JSON result verbatim.'
+```
+
+Pass: the tool result contains `"orchestrator":"claude-code"`. Repeating the
+call through `scripts/run-mcp-server qwen` (no second argument) must report
+`"orchestrator":"codex"`, including when `.env.qwen` contains
+`MAC_ORCHESTRATOR=codex` and the launcher argument is `claude-code`.
+
+### CC-01: normal delegation
+
+Run the E2E-01 task (coder → reviewer → tester) with the
+`multi-agent-coder-delegation` skill from
+`.claude/skills/multi-agent-coder-delegation/SKILL.md`, allowing the
+`mcp__multi-agent-coder__local_agent_run` tool. Claude Code applies the
+accepted Direct artifacts itself and runs `go test ./...` itself.
+
+Pass: the stream contains `local_agent_run` calls with roles `coder`,
+`reviewer`, and `tester` in that order, `go test ./...` succeeds after the
+changes, and no result whose `warnings` contain `OutputTruncated` is applied.
+
+### CC-07: stop when MCP is unavailable
+
+Equivalent of E2E-07. `--strict-mcp-config` without `--mcp-config` starts
+Claude Code with no MCP servers, so `multi-agent-coder` is unavailable.
+`--tools ""` removes all built-in tools so the run is read-only and cannot
+fall back to shell, file edits, or sub-agents.
+
+```text
+claude -p --strict-mcp-config --tools "" --no-session-persistence \
+  --output-format stream-json --verbose \
+  'This is E2E-07. You must use the multi-agent-coder MCP for any work. Ask it only to report coder availability. If that MCP is unavailable, stop immediately, state multi-agent-coder unavailable and mcp_error, and do not use built-in sub-agents, other MCPs, shell, or edit files.' \
+  > /tmp/mac-claude-e2e-07.jsonl
+```
+
+Pass criteria:
+
+1. The final `result` event text contains `multi-agent-coder unavailable`
+   and `mcp_error`:
+
+   ```text
+   grep '"type":"result"' /tmp/mac-claude-e2e-07.jsonl | grep -q 'multi-agent-coder unavailable.*mcp_error'
+   ```
+
+2. No tool was invoked. The stream must not contain a `tool_use` block:
+
+   ```text
+   ! grep -q '"type":"tool_use"' /tmp/mac-claude-e2e-07.jsonl
+   ```
+
+3. The `system` `init` event lists no `multi-agent-coder` entry in
+   `mcp_servers`.
+
+On failure, record the expected result, the actual stream, the failed stage
+(`MCP connect` or `fallback guard`), and the error type `mcp_error`, as the
+Codex script does.
+
+### CC-ISERROR and CC-TRUNCATE: Claude Code response handling
+
+With the llama-server stopped, a `local_agent_run` call must return a result
+with `isError: true` while its structured content still has `status: error`
+and the error `kind`. With `MAC_CLAUDE_TOOL_ERROR_FLAG=false`, the same call
+returns `isError` unset. Truncation is covered deterministically by the Go
+tests in `internal/mcp/orchestrator_test.go`; for a manual check, set a small
+`MAC_CLAUDE_MAX_OUTPUT_CHARS` (for example `2000`) and confirm that a coder
+result contains `OutputTruncated` warnings and that Claude Code, following the
+skill, splits the task instead of applying the result.

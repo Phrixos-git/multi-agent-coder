@@ -134,6 +134,46 @@ args = ["qwen"]
 
 設定変更後はCodex CLIまたはIDE拡張機能を再起動してください。`local_agent_health` はMain LLMとCoding LLMを個別に確認します。各LLMの `/v1/models` へ有限Timeoutで接続し、Coding LLM停止時は `coding_llm.status=stopped` と `status=degraded` を返します。MCP Serverは起動したままです。
 
+## Claude CodeへMCP Serverを追加
+
+Claude CodeからもCodexと同じ `scripts/run-mcp-server` を使います。`.env.qwen` / `.env.strata` はCodexと共有し、第2引数 `claude-code` で呼び出し元を指定します。
+
+```bash
+claude mcp add multi-agent-coder -- /absolute/path/to/multi-agent-coder/scripts/run-mcp-server qwen claude-code
+```
+
+登録結果は次のコマンドで確認できます。Claude Codeのセッション内では `/mcp` でも接続状態を確認できます。
+
+```bash
+claude mcp list
+```
+
+`scripts/run-mcp-server` の引数は `{qwen|strata} [codex|claude-code]` です。
+
+- 第1引数は従来どおりモデルprofile（読み込む `.env.<profile>`）を選びます。
+- 第2引数は呼び出し元のMCP Clientです。省略時は `codex` で、従来とまったく同じ動作になります。`codex` / `claude-code` 以外の値や3個以上の引数を渡すと、Usageをstderrに出して終了コード2で終了します。
+- ラッパーは `.env.<profile>` を読み込んだ後で `MAC_ORCHESTRATOR` を第2引数の値に設定します。`.env` に `MAC_ORCHESTRATOR` の行があっても起動引数が優先されるため、`.env` には書かないでください。
+
+`claude-code` で起動した場合だけ、次の処理が加わります。`local_agent_health` の `orchestrator` フィールドで、どちらで起動したかを確認できます。
+
+- Role Promptとして `prompts/claude-code/<role>.md` を使います。内容は `prompts/<role>.md` の「Codex」を「Claude Code」に置き換えたものです。
+- `local_agent_run` の応答が `MAC_CLAUDE_MAX_OUTPUT_CHARS` を超える場合、`patch` と各 `artifacts[].content` を後ろから切り詰め、`warnings` に `OutputTruncated: ...` を追加します。切り詰めた成果物は適用できないため、タスクを分割して再依頼してください。`summary`、`findings`、`risks`、`notes`、`error`、`changed_files` は切り詰めません。
+- `status` が `error` の応答では、MCPの `isError` を立てます。構造化出力とテキストの内容はCodexの場合と同じです。
+
+| 環境変数 | 用途 | 既定値 |
+| --- | --- | --- |
+| `MAC_CLAUDE_MAX_OUTPUT_CHARS` | Claude Code向け応答（JSON）の最大文字数。`0` は無制限 | `80000` |
+| `MAC_CLAUDE_TOOL_ERROR_FLAG` | 失敗時にMCPの `isError` を立てるか（`true` / `false`） | `true` |
+
+`MAC_CLAUDE_*` は共有 `.env` に書けます。Codexから起動した場合は挙動に反映しませんが、値の検証は常に行います。不正な値があるとCodexからの起動も設定エラーで中止されます。
+
+Claude Code側の制限との関係：
+
+- `MAX_MCP_OUTPUT_TOKENS` はClaude CodeがMCP Toolの出力として受け取るtoken数の上限です。`MAC_CLAUDE_MAX_OUTPUT_CHARS` は文字数による上限なので、token数との比率は内容（コード、日本語など）によって変わります。Claude Code側で出力が切られる場合は、`MAC_CLAUDE_MAX_OUTPUT_CHARS` を下げるか `MAX_MCP_OUTPUT_TOKENS` を上げてください。MAC側の上限内に収めると、どのフィールドが切られたかが `warnings` でわかります。
+- `MCP_TOOL_TIMEOUT` はClaude CodeがMCP Toolの完了を待つ時間（ミリ秒）です。Pi Backendは既定でAgent全体のTimeoutがなく（`MAC_PI_TIMEOUT=0`）、実行が長くなることがあります。Pi Coder/Fixerを使う場合は、Pi実行時間より長い値を指定してClaude Codeを起動してください（例：`MCP_TOOL_TIMEOUT=1800000 claude`）。
+
+Claude Code用のSkillは `.claude/skills/multi-agent-coder-delegation/SKILL.md`、指示ファイルは `CLAUDE.md` です。Claude Codeから作業する場合は、AGENTS.mdとdocs/DESIGN.mdでCodexが担う責務（成果物の検証・適用、テスト実行、Pi Patchの確認など）をClaude Codeが担います。
+
 ## 環境変数一覧
 
 Server本体が読み取る環境変数はすべて省略可能で、省略時はコード内の既定値を使用します。ただし、意図しないRepositoryを対象にしないよう、実運用では `MAC_REPOSITORY_ROOT` を明示してください。また、利用するLLMの実際の構成に合わせて接続先とモデル名を指定してください。
@@ -163,6 +203,9 @@ Server本体が読み取る環境変数はすべて省略可能で、省略時�
 | `MAC_PI_AGENT_DIR` | Pi専用Agent Directory（空ならPi標準値） | 空 |
 | `MAC_PI_RPC_ARGS` | 追加RPC引数（空白区切り） | 空 |
 | `MAC_PI_TIMEOUT` | Pi Agent全体Timeout。`0`は無制限 | `0` |
+| `MAC_ORCHESTRATOR` | 呼び出し元のMCP Client（`codex` / `claude-code`）。`scripts/run-mcp-server` が第2引数から設定するため、`.env` には書かない | `codex` |
+| `MAC_CLAUDE_MAX_OUTPUT_CHARS` | Claude Code向け応答の最大文字数。`0`は無制限。`claude-code`時のみ適用 | `80000` |
+| `MAC_CLAUDE_TOOL_ERROR_FLAG` | 失敗時にMCPの `isError` を立てるか（`true` / `false`）。`claude-code`時のみ適用 | `true` |
 
 URLには絶対HTTP(S) URL、Timeoutには正のGo duration、token上限には1以上の整数を指定します。`MAC_LLM_TEMPERATURE` は0以上2以下、`MAC_LOG_LEVEL` は `debug`、`info`、`warn`、`error` のいずれかです。不正な値の場合、Serverは設定エラーとして起動を中止します。
 
