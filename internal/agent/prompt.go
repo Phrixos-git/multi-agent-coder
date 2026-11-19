@@ -49,6 +49,24 @@ func NewPromptBuilder() (*PromptBuilder, error) {
 	return newPromptBuilder(roleprompts.FS)
 }
 
+// NewPromptBuilderForOrchestrator loads the role prompts written for the given
+// MCP client. "codex" (or empty) uses the same prompts as NewPromptBuilder;
+// "claude-code" uses prompts/claude-code/<role>.md.
+func NewPromptBuilderForOrchestrator(orchestrator string) (*PromptBuilder, error) {
+	switch orchestrator {
+	case "", "codex":
+		return NewPromptBuilder()
+	case "claude-code":
+		promptFS, err := fs.Sub(roleprompts.FS, "claude-code")
+		if err != nil {
+			return nil, &PromptError{Err: fmt.Errorf("load claude-code system prompts: %w", err)}
+		}
+		return newPromptBuilder(promptFS)
+	default:
+		return nil, &PromptError{Err: fmt.Errorf("unknown orchestrator %q", orchestrator)}
+	}
+}
+
 func newPromptBuilder(promptFS fs.FS) (*PromptBuilder, error) {
 	prompts := make(map[Role]string, len(validRoles))
 	for role := range validRoles {

@@ -29,6 +29,19 @@ func NewDirectBackend(client ChatCompleter) (*DirectBackend, error) {
 	return &DirectBackend{client: client, prompts: p}, nil
 }
 
+// NewDirectBackendForOrchestrator is NewDirectBackend with role prompts
+// selected for the given MCP client (see NewPromptBuilderForOrchestrator).
+func NewDirectBackendForOrchestrator(client ChatCompleter, orchestrator string) (*DirectBackend, error) {
+	if client == nil {
+		return nil, fmt.Errorf("create direct backend: LLM client is nil")
+	}
+	p, err := NewPromptBuilderForOrchestrator(orchestrator)
+	if err != nil {
+		return nil, err
+	}
+	return &DirectBackend{client: client, prompts: p}, nil
+}
+
 func (b *DirectBackend) Run(ctx context.Context, input PromptInput) (string, error) {
 	messages, err := b.prompts.Build(input)
 	if err != nil {

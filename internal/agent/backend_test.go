@@ -91,3 +91,30 @@ func (c *scriptedCompleter) ChatCompletion(_ context.Context, messages []llm.Mes
 	c.roles = append([]string(nil), roles...)
 	return c.response, c.err
 }
+
+func TestNewDirectBackendForOrchestrator(t *testing.T) {
+	if backend, err := NewDirectBackendForOrchestrator(nil, "claude-code"); err == nil || backend != nil {
+		t.Fatalf("NewDirectBackendForOrchestrator(nil) = (%v, %v), want nil backend and error", backend, err)
+	}
+	if backend, err := NewDirectBackendForOrchestrator(&scriptedCompleter{}, "cursor"); err == nil || backend != nil {
+		t.Fatalf("unknown orchestrator = (%v, %v), want error", backend, err)
+	}
+	for _, test := range []struct{ orchestrator, want, reject string }{
+		{"codex", "for Codex to review", "Claude Code"},
+		{"claude-code", "for Claude Code to review", "Codex"},
+	} {
+		t.Run(test.orchestrator, func(t *testing.T) {
+			client := &scriptedCompleter{response: llm.ChatCompletionResponse{Choices: []llm.Choice{{Message: llm.Message{Content: "ok"}}}}}
+			backend, err := NewDirectBackendForOrchestrator(client, test.orchestrator)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := backend.Run(context.Background(), PromptInput{Role: RoleCoder, Task: "implement"}); err != nil {
+				t.Fatal(err)
+			}
+			if system := client.messages[0].Content; !strings.Contains(system, test.want) || strings.Contains(system, test.reject) {
+				t.Fatalf("system prompt = %q", system)
+			}
+		})
+	}
+}

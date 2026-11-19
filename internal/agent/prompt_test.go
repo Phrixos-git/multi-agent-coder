@@ -2,8 +2,12 @@ package agent
 
 import (
 	"errors"
+	"io/fs"
+	"reflect"
 	"strings"
 	"testing"
+
+	roleprompts "github.com/arietis/multi-agent-coder/prompts"
 )
 
 func TestPromptBuilderBuildsEveryRole(t *testing.T) {
@@ -80,5 +84,86 @@ func TestRoleSystemPromptsAreIndependent(t *testing.T) {
 			t.Fatalf("roles %s and %s share a system prompt", previous, role)
 		}
 		seen[messages[0].Content] = role
+	}
+}
+
+func TestPromptBuilderForCodexMatchesExistingPrompts(t *testing.T) {
+	legacy, err := NewPromptBuilder()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, orchestrator := range []string{"", "codex"} {
+		builder, err := NewPromptBuilderForOrchestrator(orchestrator)
+		if err != nil {
+			t.Fatalf("NewPromptBuilderForOrchestrator(%q) error = %v", orchestrator, err)
+		}
+		for _, role := range []Role{RoleCoder, RoleReviewer, RoleTester, RoleFixer} {
+			input := PromptInput{Role: role, Task: "task", Requirements: []string{"req"}, Files: []File{{Path: "a.go", Content: "package a"}}, AdditionalContext: "ctx"}
+			want, err := legacy.Build(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := builder.Build(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("%q/%s messages differ from NewPromptBuilder:\n got=%#v\nwant=%#v", orchestrator, role, got, want)
+			}
+			file, err := fs.ReadFile(roleprompts.FS, string(role)+".md")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got[0].Content != strings.TrimSpace(string(file)) {
+				t.Fatalf("%q/%s system prompt is not prompts/%s.md", orchestrator, role, role)
+			}
+		}
+	}
+}
+
+func TestPromptBuilderForClaudeCodeUsesClaudeCodePrompts(t *testing.T) {
+	legacy, err := NewPromptBuilder()
+	if err != nil {
+		t.Fatal(err)
+	}
+	builder, err := NewPromptBuilderForOrchestrator("claude-code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, role := range []Role{RoleCoder, RoleReviewer, RoleTester, RoleFixer} {
+		input := PromptInput{Role: role, Task: "task", Requirements: []string{"req"}, Files: []File{{Path: "a.go", Content: "package a"}}, AdditionalContext: "ctx"}
+		want, err := legacy.Build(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := builder.Build(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		file, err := fs.ReadFile(roleprompts.FS, "claude-code/"+string(role)+".md")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got[0].Content != strings.TrimSpace(string(file)) {
+			t.Fatalf("%s system prompt is not prompts/claude-code/%s.md", role, role)
+		}
+		if strings.Contains(got[0].Content, "Codex") || !strings.Contains(got[0].Content, "Claude Code") {
+			t.Fatalf("%s system prompt still targets Codex: %q", role, got[0].Content)
+		}
+		// Only the orchestrator name differs from the Codex prompt.
+		if got[0].Content != strings.ReplaceAll(want[0].Content, "Codex", "Claude Code") {
+			t.Fatalf("%s system prompt differs from Codex beyond the orchestrator name", role)
+		}
+		if len(got) != 2 || got[1] != want[1] {
+			t.Fatalf("%s user message differs between orchestrators", role)
+		}
+	}
+}
+
+func TestPromptBuilderForOrchestratorRejectsUnknown(t *testing.T) {
+	_, err := NewPromptBuilderForOrchestrator("cursor")
+	var promptErr *PromptError
+	if !errors.As(err, &promptErr) {
+		t.Fatalf("unknown orchestrator error = %v", err)
 	}
 }

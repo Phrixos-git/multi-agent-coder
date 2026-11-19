@@ -30,7 +30,7 @@ func NewServer(cfg config.Config, logger *slog.Logger) (*Server, error) {
 		if role == agent.RoleCoder || role == agent.RoleFixer {
 			format = agentJSONSchema(role)
 		}
-		direct, err := agent.NewDirectBackend(llm.NewClientForBackendWithFormat(endpoint, maxTokens, cfg.LLMReasoningEffort, cfg.LLMTemperature, format, nil, logger))
+		direct, err := agent.NewDirectBackendForOrchestrator(llm.NewClientForBackendWithFormat(endpoint, maxTokens, cfg.LLMReasoningEffort, cfg.LLMTemperature, format, nil, logger), cfg.Orchestrator)
 		if err != nil {
 			return nil, err
 		}
@@ -63,7 +63,7 @@ func directConfigForRole(cfg config.Config, role agent.Role) (config.LLMConfig, 
 }
 
 func newServer(cfg config.Config, logger *slog.Logger, completer agent.ChatCompleter) (*Server, error) {
-	direct, err := agent.NewDirectBackend(completer)
+	direct, err := agent.NewDirectBackendForOrchestrator(completer, cfg.Orchestrator)
 	if err != nil {
 		return nil, err
 	}
