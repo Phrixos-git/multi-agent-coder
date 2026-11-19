@@ -29,6 +29,12 @@ func TestLoadDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
+	if cfg.MainLLM.BaseURL != "http://127.0.0.1:8089" {
+		t.Fatalf("MainLLM.BaseURL = %q, want http://127.0.0.1:8089", cfg.MainLLM.BaseURL)
+	}
+	if cfg.CodingLLM.BaseURL != "http://127.0.0.1:8089" {
+		t.Fatalf("CodingLLM.BaseURL = %q, want http://127.0.0.1:8089", cfg.CodingLLM.BaseURL)
+	}
 	if cfg.MainLLM != (LLMConfig{BaseURL: defaultLLMBaseURL, Model: defaultLLMModel, Timeout: 180 * time.Second}) || cfg.CodingLLM != (LLMConfig{BaseURL: defaultCodingLLMBaseURL, Model: defaultCodingLLMModel, Timeout: 180 * time.Second}) || cfg.LLMMaxTokens != 4096 || cfg.CoderMaxTokens != 4096 || cfg.ReviewerMaxTokens != 4096 || cfg.TesterMaxTokens != 3072 || cfg.FixerMaxTokens != 4096 || cfg.LLMReasoningEffort != "none" || cfg.LLMTemperature != 0.2 || cfg.LogLevel != "info" {
 		t.Fatalf("Load() defaults = %+v", cfg)
 	}

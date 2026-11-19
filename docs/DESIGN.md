@@ -400,8 +400,8 @@ fixer
 {
   "status": "ok",
   "llm": "available",
-  "main_llm": {"status": "available", "base_url": "http://127.0.0.1:8080", "model": "qwen3.8-27b"},
-  "coding_llm": {"status": "available", "base_url": "http://127.0.0.1:18082", "model": "qwen-coder"}
+  "main_llm": {"status": "available", "base_url": "http://127.0.0.1:8089", "model": "qwen3.8-27b"},
+  "coding_llm": {"status": "available", "base_url": "http://127.0.0.1:8089", "model": "qwen-coder"}
 }
 ```
 
@@ -544,7 +544,7 @@ cargo test
 Default：
 
 ```text
-http://127.0.0.1:8080
+http://127.0.0.1:8089
 ```
 
 Chat Completion：
@@ -797,10 +797,10 @@ MAC_LOG_LEVEL
 Default：
 
 ```text
-MAC_LLM_BASE_URL=http://127.0.0.1:8080
+MAC_LLM_BASE_URL=http://127.0.0.1:8089
 MAC_LLM_MODEL=qwen3.8-27b
 MAC_LLM_TIMEOUT=180s
-MAC_CODING_LLM_BASE_URL=http://127.0.0.1:18082
+MAC_CODING_LLM_BASE_URL=http://127.0.0.1:8089
 MAC_CODING_LLM_MODEL=qwen-coder
 MAC_CODING_LLM_TIMEOUT=180s
 MAC_LLM_MAX_TOKENS=4096
@@ -851,7 +851,9 @@ status
 
 Prompt全文およびソースコード全文はDefaultではログへ記録しない。
 
-CodexからSTDIO Serverを起動する際は、`scripts/run-mcp-server` を利用してstderrを日次ログへ保存できる。ラッパーはstderrを親プロセスにも転送し、stdoutには一切出力しない。既定の保存先はRepository Root内の `logs/` とし、`MAC_LOG_DIR` で変更可能とする。
+CodexからSTDIO Serverを起動する際は、`scripts/run-mcp-server` に `qwen` または `strata` を渡す。ラッパーはRepository Rootにある信頼済みの `.env.qwen` または `.env.strata` をBashで読み込み、設定を子プロセスへ渡す。Repository Rootの実行ファイル `multi-agent-coder` を優先し、実行できない場合は `bin/multi-agent-coder` を探す。Repository Rootの `run-mcp-server` からも同じラッパーを起動できる。
+
+ラッパーはstderrを親プロセスへ転送し、`logs/multi-agent-coder-<profile>-YYYY-MM-DD.log` に保存する。ラッパー自体はstdoutに出力しない。ログのディレクトリは `MAC_LOG_DIR` で変更できる。
 
 ---
 

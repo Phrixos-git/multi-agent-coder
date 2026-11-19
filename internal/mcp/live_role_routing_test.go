@@ -43,8 +43,7 @@ func TestLiveRoleRouting(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 	base.MainLLM.Model = liveModelID(t, ctx, base.MainLLM)
-	base.CodingLLM.BaseURL = base.MainLLM.BaseURL
-	base.CodingLLM.Model = base.MainLLM.Model
+	base.CodingLLM.Model = liveModelID(t, ctx, base.CodingLLM)
 	health := liveCallTool(t, ctx, base, "local_agent_health", nil)
 	if health["status"] != "ok" || health["main_llm"].(map[string]any)["status"] != "available" || health["coding_llm"].(map[string]any)["status"] != "available" {
 		t.Fatalf("live health = %#v", health)

@@ -13,9 +13,9 @@ import (
 )
 
 const (
-	defaultLLMBaseURL         = "http://127.0.0.1:8080"
+	defaultLLMBaseURL         = "http://127.0.0.1:8089"
 	defaultLLMModel           = "qwen3.8-27b"
-	defaultCodingLLMBaseURL   = "http://127.0.0.1:18082"
+	defaultCodingLLMBaseURL   = "http://127.0.0.1:8089"
 	defaultCodingLLMModel     = "qwen-coder"
 	defaultLLMTimeout         = 180 * time.Second
 	defaultLLMMaxTokens       = 4096

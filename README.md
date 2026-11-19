@@ -18,7 +18,7 @@ cd /absolute/path/to/multi-agent-coder
 go build -o ./multi-agent-coder ./cmd/multi-agent-coder
 ```
 
-llama.cpp Serverは別途起動してください。標準構成ではCoder/FixerがCoding LLM（`127.0.0.1:18082`）をDirectで使用し、Reviewer/TesterがMain LLM（推奨Qwen3.8-27B、`127.0.0.1:8080`）をDirectで使用します。`MAC_CODER_BACKEND`と`MAC_FIXER_BACKEND`は個別に`direct`または`pi`を選べます。Reviewer/TesterはDirectのみです。Piが起動できない場合にDirectへfallbackしません。
+llama.cpp Serverは別途起動してください。標準構成ではCoder/FixerがCoding LLM（`127.0.0.1:8089`）をDirectで使用し、Reviewer/TesterがMain LLM（推奨Qwen3.8-27B、`127.0.0.1:8089`）をDirectで使用します。`MAC_CODER_BACKEND`と`MAC_FIXER_BACKEND`は個別に`direct`または`pi`を選べます。Reviewer/TesterはDirectのみです。Piが起動できない場合にDirectへfallbackしません。
 
 ## Agentの権限と成果物
 
@@ -40,7 +40,7 @@ MACはPi子プロセスの`PI_CODING_AGENT_DIR`へこの値を渡します。`AP
 {
   "providers": {
     "local-qwen": {
-      "baseUrl": "http://127.0.0.1:8080/v1",
+      "baseUrl": "http://127.0.0.1:8089/v1",
       "api": "openai-completions",
       "apiKey": "local",
       "models": [{"id": "<llama.cpp-model-id>", "name": "Qwen3.8-27B", "contextWindow": 65536, "maxTokens": 8192}]
@@ -74,10 +74,10 @@ codex mcp add multi-agent-coder \
   --env MAC_PI_AGENT_DIR=/home/user/.pi/mac-agent \
   --env MAC_PI_RPC_ARGS= \
   --env MAC_PI_TIMEOUT=0 \
-  --env MAC_LLM_BASE_URL=http://127.0.0.1:8080 \
+  --env MAC_LLM_BASE_URL=http://127.0.0.1:8089 \
   --env MAC_LLM_MODEL=qwen3.8-27b \
   --env MAC_LLM_TIMEOUT=180s \
-  --env MAC_CODING_LLM_BASE_URL=http://127.0.0.1:18082 \
+  --env MAC_CODING_LLM_BASE_URL=http://127.0.0.1:8089 \
   --env MAC_CODING_LLM_MODEL=qwen-coder \
   --env MAC_CODING_LLM_TIMEOUT=180s \
   --env MAC_REPOSITORY_ROOT=/absolute/path/to/target-repository \
@@ -92,10 +92,10 @@ codex mcp add multi-agent-coder \
 
 ```bash
 codex mcp add multi-agent-coder \
-  --env MAC_LLM_BASE_URL=http://127.0.0.1:8080 \
+  --env MAC_LLM_BASE_URL=http://127.0.0.1:8089 \
   --env MAC_LLM_MODEL=qwen3.8-27b \
   --env MAC_LLM_TIMEOUT=180s \
-  --env MAC_CODING_LLM_BASE_URL=http://127.0.0.1:18082 \
+  --env MAC_CODING_LLM_BASE_URL=http://127.0.0.1:8089 \
   --env MAC_CODING_LLM_MODEL=qwen-coder \
   --env MAC_CODING_LLM_TIMEOUT=180s \
   --env MAC_LLM_MAX_TOKENS=4096 \
@@ -122,11 +122,14 @@ MCP Serverを再ビルドした場合、登録済みの実行ファイルと同�
 
 ### MCP stderrログの保存
 
-`scripts/run-mcp-server` をMCPの `command` に指定すると、stdoutはMCP Protocol専用のまま、stderrをCodexへ転送しつつ日次ログへ保存します。既定の保存先は `logs/multi-agent-coder-YYYY-MM-DD.log` です。`logs/` はGit管理対象外です。保存先は `MAC_LOG_DIR` で変更できます。
+`scripts/run-mcp-server` をMCPの `command` に指定し、`args` で `qwen` または `strata` を選びます。`.env.example` をRepository直下の `.env.qwen` または `.env.strata` にコピーし、対象Repositoryとモデルの設定を記入してください。ラッパーは設定ファイルをBashで読み込むため、信頼できるファイルを使ってください。Repository直下の `run-mcp-server` からも同じコマンドを実行できます。
+
+stdoutはMCP Protocol専用です。stderrはCodexへ転送し、既定では `logs/multi-agent-coder-<profile>-YYYY-MM-DD.log` に保存します。`logs/` はGit管理対象外です。保存先は `MAC_LOG_DIR` で変更できます。
 
 ```toml
 [mcp_servers.multi-agent-coder]
 command = "/absolute/path/to/multi-agent-coder/scripts/run-mcp-server"
+args = ["qwen"]
 ```
 
 設定変更後はCodex CLIまたはIDE拡張機能を再起動してください。`local_agent_health` はMain LLMとCoding LLMを個別に確認します。各LLMの `/v1/models` へ有限Timeoutで接続し、Coding LLM停止時は `coding_llm.status=stopped` と `status=degraded` を返します。MCP Serverは起動したままです。
@@ -138,10 +141,10 @@ Server本体が読み取る環境変数はすべて省略可能で、省略時�
 | 環境変数 | 用途 | 既定値 |
 | --- | --- | --- |
 | `MAC_REPOSITORY_ROOT` | Agentが参照する対象Repository | Server起動時のカレントディレクトリ |
-| `MAC_LLM_BASE_URL` | reviewer/testerのMain LLM | `http://127.0.0.1:8080` |
+| `MAC_LLM_BASE_URL` | reviewer/testerのMain LLM | `http://127.0.0.1:8089` |
 | `MAC_LLM_MODEL` | Main LLMのモデル名 | `qwen3.8-27b` |
 | `MAC_LLM_TIMEOUT` | Main LLMのリクエストTimeout | `180s` |
-| `MAC_CODING_LLM_BASE_URL` | coder/fixerのCoding LLM | `http://127.0.0.1:18082` |
+| `MAC_CODING_LLM_BASE_URL` | coder/fixerのCoding LLM | `http://127.0.0.1:8089` |
 | `MAC_CODING_LLM_MODEL` | Coding LLMのモデル名 | `qwen-coder` |
 | `MAC_CODING_LLM_TIMEOUT` | Coding LLMのリクエストTimeout | `180s` |
 | `MAC_LLM_MAX_TOKENS` | Role固有値がない場合の共通token上限 | `4096` |
