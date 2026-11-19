@@ -31,6 +31,7 @@ type HealthOutput struct {
 	MainLLM      LLMHealth `json:"main_llm" jsonschema:"main LLM connectivity"`
 	CodingLLM    LLMHealth `json:"coding_llm" jsonschema:"coding LLM connectivity"`
 	Pi           *PiHealth `json:"pi,omitempty" jsonschema:"shared Pi readiness"`
+	Orchestrator string    `json:"orchestrator" jsonschema:"MCP client the server was started for: codex or claude-code"`
 }
 
 type PiHealth struct {
@@ -59,6 +60,7 @@ func registerHealthTool(server *sdkmcp.Server, cfg config.Config, logger *slog.L
 			FixerBackend: cfg.FixerBackend,
 			MainLLM:      probeLLM(ctx, cfg.MainLLM),
 			CodingLLM:    probeLLM(ctx, cfg.CodingLLM),
+			Orchestrator: orchestratorName(cfg),
 		}
 		output.LLM = output.MainLLM.Status
 		if cfg.CoderBackend == "pi" || cfg.FixerBackend == "pi" {

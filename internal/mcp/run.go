@@ -93,7 +93,8 @@ func registerRunTool(server *sdkmcp.Server, runner agentRunner, reader fileReade
 		logger.InfoContext(ctx, "MCP tool request completed",
 			"role", input.Role, "agent", input.Role, "request_id", requestID,
 			"backend", backend, "duration", time.Since(started),
-			"status", output.Status, "result", output.Status, "error_type", errorType)
+			"status", output.Status, "result", output.Status, "error_type", errorType,
+			"orchestrator", orchestratorName(cfg))
 		if backend == "pi" {
 			cleanupStatus := "success"
 			for _, warning := range output.Warnings {
@@ -102,6 +103,10 @@ func registerRunTool(server *sdkmcp.Server, runner agentRunner, reader fileReade
 				}
 			}
 			logger.InfoContext(ctx, "Pi agent execution metrics", "request_id", requestID, "role", input.Role, "backend", "pi", "model", output.PiModel, "process_exit_status", output.PiExitStatus, "changed_files_count", len(output.ChangedFiles), "repair_cycle_count", output.RepairCycleCount, "test_command_count", output.TestCommandCount, "tool_call_count", output.ToolCallCount, "cleanup_result", cleanupStatus, "execution_result", output.Status, "error_type", errorType)
+		}
+		if cfg.Orchestrator == config.OrchestratorClaudeCode {
+			result, limited := claudeCodeResult(cfg, output)
+			return result, limited, nil
 		}
 		return nil, output, nil
 	})
