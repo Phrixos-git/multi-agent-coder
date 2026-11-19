@@ -26,6 +26,13 @@ const (
 	defaultLLMReasoningEffort = "none"
 	defaultLLMTemperature     = 0.2
 	defaultLogLevel           = "info"
+	defaultClaudeMaxOutput    = 80000
+)
+
+// Supported MCP clients that orchestrate multi-agent-coder.
+const (
+	OrchestratorCodex      = "codex"
+	OrchestratorClaudeCode = "claude-code"
 )
 
 // LLMConfig identifies one OpenAI-compatible local model endpoint.
@@ -56,6 +63,14 @@ type Config struct {
 	LLMTemperature     float64
 	RepositoryRoot     string
 	LogLevel           string
+	// Orchestrator identifies the MCP client: codex (default) or claude-code.
+	Orchestrator string
+	// ClaudeMaxOutputChars limits Claude Code responses; 0 means unlimited.
+	// It is validated for every orchestrator but applied only to claude-code.
+	ClaudeMaxOutputChars int
+	// ClaudeToolErrorFlag sets MCP isError on failed Claude Code responses.
+	// It is validated for every orchestrator but applied only to claude-code.
+	ClaudeToolErrorFlag bool
 }
 
 // Load reads and validates configuration from the environment.
@@ -105,6 +120,14 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	claudeMaxOutputChars, err := parseInt("MAC_CLAUDE_MAX_OUTPUT_CHARS", defaultClaudeMaxOutput)
+	if err != nil {
+		return Config{}, err
+	}
+	claudeToolErrorFlag, err := parseStrictBool("MAC_CLAUDE_TOOL_ERROR_FLAG", true)
+	if err != nil {
+		return Config{}, err
+	}
 	cfg := Config{
 		CoderBackend: strings.ToLower(envOrDefault("MAC_CODER_BACKEND", "direct")),
 		FixerBackend: strings.ToLower(envOrDefault("MAC_FIXER_BACKEND", "direct")),
@@ -131,6 +154,10 @@ func Load() (Config, error) {
 		LLMTemperature:     temperature,
 		RepositoryRoot:     repositoryRoot,
 		LogLevel:           strings.ToLower(envOrDefault("MAC_LOG_LEVEL", defaultLogLevel)),
+
+		Orchestrator:         strings.ToLower(envOrDefault("MAC_ORCHESTRATOR", OrchestratorCodex)),
+		ClaudeMaxOutputChars: claudeMaxOutputChars,
+		ClaudeToolErrorFlag:  claudeToolErrorFlag,
 	}
 	if err := cfg.validate(); err != nil {
 		return Config{}, err
@@ -208,6 +235,14 @@ func (c *Config) validate() error {
 	if _, ok := logLevels[c.LogLevel]; !ok {
 		return fmt.Errorf("ConfigError: MAC_LOG_LEVEL must be debug, info, warn, or error")
 	}
+	if c.Orchestrator != OrchestratorCodex && c.Orchestrator != OrchestratorClaudeCode {
+		return fmt.Errorf("ConfigError: MAC_ORCHESTRATOR must be codex or claude-code")
+	}
+	// MAC_CLAUDE_* is validated regardless of the orchestrator so that a typo
+	// in a shared .env file is detected even when Codex starts the server.
+	if c.ClaudeMaxOutputChars < 0 {
+		return fmt.Errorf("ConfigError: MAC_CLAUDE_MAX_OUTPUT_CHARS must be zero (unlimited) or greater")
+	}
 	return nil
 }
 
@@ -258,6 +293,20 @@ func parseRoleMaxTokens(name string, codeDefault, global int) (int, error) {
 		fallback = global
 	}
 	return parseInt(name, fallback)
+}
+
+// parseStrictBool accepts only true or false (case-insensitive).
+func parseStrictBool(name string, fallback bool) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
+	case "":
+		return fallback, nil
+	case "true":
+		return true, nil
+	case "false":
+		return false, nil
+	default:
+		return false, fmt.Errorf("ConfigError: %s must be true or false", name)
+	}
 }
 
 func parseFloat(name string, fallback float64) (float64, error) {

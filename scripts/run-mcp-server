@@ -4,13 +4,27 @@ set -euo pipefail
 
 repository_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# Select model profile
-if [[ $# -ne 1 ]]; then
-    printf 'Usage: %s {qwen|strata}\n' "$0" >&2
+usage() {
+    printf 'Usage: %s {qwen|strata} [codex|claude-code]\n' "$0" >&2
+}
+
+# Select model profile and MCP client (orchestrator)
+if [[ $# -lt 1 || $# -gt 2 ]]; then
+    usage
     exit 2
 fi
 
 profile="$1"
+orchestrator="${2:-codex}"
+
+case "${orchestrator}" in
+    codex|claude-code)
+        ;;
+    *)
+        usage
+        exit 2
+        ;;
+esac
 
 case "${profile}" in
     qwen)
@@ -37,6 +51,10 @@ set -a
 source "${env_file}"
 set +a
 
+# The launcher argument identifies the MCP client. Export it after loading
+# the shared env file so that a MAC_ORCHESTRATOR line there cannot override it.
+export MAC_ORCHESTRATOR="${orchestrator}"
+
 # Locate MAC executable
 server_binary="${repository_root}/multi-agent-coder"
 
@@ -52,7 +70,7 @@ mkdir -p -- "${log_directory}"
 log_file="${log_directory}/multi-agent-coder-${profile}-$(date +%F).log"
 
 # Keep stdout exclusively for MCP protocol traffic.
-# Save stderr to file and forward it to Codex.
+# Save stderr to file and forward it to the MCP client.
 exec 3>&2
 exec 2> >(tee -a -- "${log_file}" >&3)
 

@@ -178,3 +178,69 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadOrchestratorAndClaudeDefaults(t *testing.T) {
+	t.Setenv("MAC_REPOSITORY_ROOT", t.TempDir())
+	t.Setenv("MAC_ORCHESTRATOR", "")
+	t.Setenv("MAC_CLAUDE_MAX_OUTPUT_CHARS", "")
+	t.Setenv("MAC_CLAUDE_TOOL_ERROR_FLAG", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Orchestrator != OrchestratorCodex || cfg.ClaudeMaxOutputChars != 80000 || !cfg.ClaudeToolErrorFlag {
+		t.Fatalf("orchestrator defaults = %q/%d/%t", cfg.Orchestrator, cfg.ClaudeMaxOutputChars, cfg.ClaudeToolErrorFlag)
+	}
+}
+
+func TestLoadOrchestratorAndClaudeValues(t *testing.T) {
+	tests := []struct {
+		orchestrator, maxChars, errorFlag string
+		wantOrchestrator                  string
+		wantMaxChars                      int
+		wantErrorFlag                     bool
+	}{
+		{"codex", "1000", "false", OrchestratorCodex, 1000, false},
+		{"claude-code", "0", "true", OrchestratorClaudeCode, 0, true},
+		{"Claude-Code", "120000", "FALSE", OrchestratorClaudeCode, 120000, false},
+	}
+	for _, test := range tests {
+		t.Run(test.orchestrator+"-"+test.maxChars+"-"+test.errorFlag, func(t *testing.T) {
+			t.Setenv("MAC_REPOSITORY_ROOT", t.TempDir())
+			t.Setenv("MAC_ORCHESTRATOR", test.orchestrator)
+			t.Setenv("MAC_CLAUDE_MAX_OUTPUT_CHARS", test.maxChars)
+			t.Setenv("MAC_CLAUDE_TOOL_ERROR_FLAG", test.errorFlag)
+			cfg, err := Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Orchestrator != test.wantOrchestrator || cfg.ClaudeMaxOutputChars != test.wantMaxChars || cfg.ClaudeToolErrorFlag != test.wantErrorFlag {
+				t.Fatalf("config = %q/%d/%t", cfg.Orchestrator, cfg.ClaudeMaxOutputChars, cfg.ClaudeToolErrorFlag)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsInvalidOrchestratorAndClaudeValues(t *testing.T) {
+	for _, orchestrator := range []string{"codex", "claude-code"} {
+		for _, test := range []struct {
+			name, env, value string
+		}{
+			{name: "orchestrator", env: "MAC_ORCHESTRATOR", value: "cursor"},
+			{name: "max output syntax", env: "MAC_CLAUDE_MAX_OUTPUT_CHARS", value: "many"},
+			{name: "max output range", env: "MAC_CLAUDE_MAX_OUTPUT_CHARS", value: "-1"},
+			{name: "error flag", env: "MAC_CLAUDE_TOOL_ERROR_FLAG", value: "yes"},
+			{name: "error flag numeric", env: "MAC_CLAUDE_TOOL_ERROR_FLAG", value: "1"},
+		} {
+			t.Run(orchestrator+"/"+test.name, func(t *testing.T) {
+				t.Setenv("MAC_REPOSITORY_ROOT", t.TempDir())
+				t.Setenv("MAC_ORCHESTRATOR", orchestrator)
+				t.Setenv(test.env, test.value)
+				_, err := Load()
+				if err == nil || !strings.HasPrefix(err.Error(), "ConfigError: ") || !strings.Contains(err.Error(), test.env) {
+					t.Fatalf("Load() error = %v, want ConfigError for %s", err, test.env)
+				}
+			})
+		}
+	}
+}
