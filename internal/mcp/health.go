@@ -24,14 +24,17 @@ type healthInput struct{}
 
 // HealthOutput is the structured result of local_agent_health.
 type HealthOutput struct {
-	Status       string    `json:"status" jsonschema:"MCP server status"`
-	CoderBackend string    `json:"coder_backend" jsonschema:"coder backend routing"`
-	FixerBackend string    `json:"fixer_backend" jsonschema:"fixer backend routing"`
-	LLM          string    `json:"llm" jsonschema:"legacy main LLM status"`
-	MainLLM      LLMHealth `json:"main_llm" jsonschema:"main LLM connectivity"`
-	CodingLLM    LLMHealth `json:"coding_llm" jsonschema:"coding LLM connectivity"`
-	Pi           *PiHealth `json:"pi,omitempty" jsonschema:"shared Pi readiness"`
-	Orchestrator string    `json:"orchestrator" jsonschema:"MCP client the server was started for: codex or claude-code"`
+	Status          string          `json:"status" jsonschema:"MCP server status"`
+	CoderBackend    string          `json:"coder_backend" jsonschema:"coder backend routing"`
+	FixerBackend    string          `json:"fixer_backend" jsonschema:"fixer backend routing"`
+	LLM             string          `json:"llm" jsonschema:"legacy main LLM status"`
+	MainLLM         LLMHealth       `json:"main_llm" jsonschema:"main LLM connectivity"`
+	CodingLLM       LLMHealth       `json:"coding_llm" jsonschema:"coding LLM connectivity"`
+	Pi              *PiHealth       `json:"pi,omitempty" jsonschema:"shared Pi readiness"`
+	Orchestrator    string          `json:"orchestrator" jsonschema:"MCP client the server was started for: codex or claude-code"`
+	WorkspaceStatus string          `json:"workspace_status" jsonschema:"Git workspace selection status: ready or needs_input"`
+	RepositoryRoot  string          `json:"repository_root,omitempty" jsonschema:"absolute Git worktree root when ready"`
+	WorkspaceInput  *WorkspaceInput `json:"workspace_input,omitempty"`
 }
 
 type PiHealth struct {
@@ -47,10 +50,10 @@ type LLMHealth struct {
 	Model   string `json:"model"`
 }
 
-func registerHealthTool(server *sdkmcp.Server, cfg config.Config, logger *slog.Logger) {
+func registerHealthTool(server *sdkmcp.Server, selection *workspaceSelection, cfg config.Config, logger *slog.Logger) {
 	sdkmcp.AddTool(server, &sdkmcp.Tool{
 		Name:        "local_agent_health",
-		Description: "Report coder/fixer backend routing and Main LLM, Coding LLM, and selected shared Pi readiness.",
+		Description: "Report the selected Git workspace, coder/fixer backend routing, and Main LLM, Coding LLM, and selected shared Pi readiness.",
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, _ healthInput) (*sdkmcp.CallToolResult, HealthOutput, error) {
 		started := time.Now()
 		requestID := newRequestID()
@@ -62,6 +65,7 @@ func registerHealthTool(server *sdkmcp.Server, cfg config.Config, logger *slog.L
 			CodingLLM:    probeLLM(ctx, cfg.CodingLLM),
 			Orchestrator: orchestratorName(cfg),
 		}
+		output.WorkspaceStatus, output.RepositoryRoot, output.WorkspaceInput = selection.health()
 		output.LLM = output.MainLLM.Status
 		if cfg.CoderBackend == "pi" || cfg.FixerBackend == "pi" {
 			piHealth := probePi(cfg)

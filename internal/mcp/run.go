@@ -20,11 +20,12 @@ import (
 
 // RunInput is the complete input to one local_agent_run invocation.
 type RunInput struct {
-	Role              string   `json:"role" jsonschema:"agent role: coder, reviewer, tester, or fixer"`
-	Task              string   `json:"task" jsonschema:"task specification"`
-	Requirements      []string `json:"requirements,omitempty" jsonschema:"requirements and constraints"`
-	Files             []string `json:"files,omitempty" jsonschema:"repository-relative files to supply to the agent"`
-	AdditionalContext string   `json:"additional_context,omitempty" jsonschema:"additional context for this invocation only"`
+	Role                string   `json:"role" jsonschema:"agent role: coder, reviewer, tester, or fixer"`
+	Task                string   `json:"task" jsonschema:"task specification"`
+	Requirements        []string `json:"requirements,omitempty" jsonschema:"requirements and constraints"`
+	Files               []string `json:"files,omitempty" jsonschema:"Git worktree root relative files to supply to the agent"`
+	AdditionalContext   string   `json:"additional_context,omitempty" jsonschema:"additional context for this invocation only"`
+	RepositoryDirectory string   `json:"repository_directory,omitempty" jsonschema:"absolute directory chosen by the user when the MCP session needs a workspace"`
 }
 
 type Artifact struct {
@@ -45,24 +46,25 @@ type RunError struct {
 
 // RunOutput is the validated local agent result.
 type RunOutput struct {
-	Status           string     `json:"status"`
-	Role             string     `json:"role"`
-	Summary          string     `json:"summary"`
-	Artifacts        []Artifact `json:"artifacts"`
-	Findings         []Finding  `json:"findings"`
-	Risks            []string   `json:"risks"`
-	Notes            []string   `json:"notes"`
-	Error            *RunError  `json:"error,omitempty"`
-	Backend          string     `json:"backend,omitempty"`
-	Patch            string     `json:"patch,omitempty"`
-	ChangedFiles     []string   `json:"changed_files,omitempty"`
-	ExecutionResults []string   `json:"execution_results,omitempty"`
-	Warnings         []string   `json:"warnings,omitempty"`
-	PiModel          string     `json:"pi_model,omitempty"`
-	PiExitStatus     string     `json:"pi_exit_status,omitempty"`
-	RepairCycleCount int        `json:"repair_cycle_count,omitempty"`
-	TestCommandCount int        `json:"test_command_count,omitempty"`
-	ToolCallCount    int        `json:"tool_call_count,omitempty"`
+	Status           string          `json:"status"`
+	Role             string          `json:"role"`
+	Summary          string          `json:"summary"`
+	Artifacts        []Artifact      `json:"artifacts"`
+	Findings         []Finding       `json:"findings"`
+	Risks            []string        `json:"risks"`
+	Notes            []string        `json:"notes"`
+	Error            *RunError       `json:"error,omitempty"`
+	Backend          string          `json:"backend,omitempty"`
+	Patch            string          `json:"patch,omitempty"`
+	ChangedFiles     []string        `json:"changed_files,omitempty"`
+	ExecutionResults []string        `json:"execution_results,omitempty"`
+	Warnings         []string        `json:"warnings,omitempty"`
+	PiModel          string          `json:"pi_model,omitempty"`
+	PiExitStatus     string          `json:"pi_exit_status,omitempty"`
+	RepairCycleCount int             `json:"repair_cycle_count,omitempty"`
+	TestCommandCount int             `json:"test_command_count,omitempty"`
+	ToolCallCount    int             `json:"tool_call_count,omitempty"`
+	WorkspaceInput   *WorkspaceInput `json:"workspace_input,omitempty"`
 }
 
 type agentRunner interface {
@@ -75,13 +77,13 @@ type fileReader interface {
 
 type piRunner interface{ UsesPi(agent.Role) bool }
 
-func registerRunTool(server *sdkmcp.Server, runner agentRunner, reader fileReader, cfg config.Config, logger *slog.Logger) {
+func registerRunTool(server *sdkmcp.Server, run func(context.Context, RunInput) RunOutput, cfg config.Config, logger *slog.Logger) {
 	sdkmcp.AddTool(server, &sdkmcp.Tool{
 		Name:        "local_agent_run",
-		Description: "Run an independent coder, reviewer, tester, or fixer. Pi coder/fixer tasks use an isolated temporary worktree; Direct results are proposals.",
+		Description: "Run an independent coder, reviewer, tester, or fixer. Pi coder/fixer tasks use an isolated temporary worktree; Direct results are proposals. When the result contains workspace_input, ask the user for a work directory and retry with their answer in repository_directory.",
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, input RunInput) (*sdkmcp.CallToolResult, RunOutput, error) {
 		started, requestID := time.Now(), newRequestID()
-		output := executeRun(ctx, runner, reader, input)
+		output := run(ctx, input)
 		errorType := ""
 		if output.Error != nil {
 			errorType = output.Error.Kind
@@ -206,6 +208,9 @@ func parseRunOutput(raw string, expectedRole agent.Role) (RunOutput, error) {
 	}
 	if output.Status != "success" && output.Status != "needs_input" && output.Status != "error" {
 		return RunOutput{}, responseValidationError("invalid status %q", output.Status)
+	}
+	if output.WorkspaceInput != nil {
+		return RunOutput{}, responseValidationError("workspace_input is reserved for the MCP server")
 	}
 	if output.Role != string(expectedRole) {
 		return RunOutput{}, responseValidationError("role %q does not match requested role %q", output.Role, expectedRole)

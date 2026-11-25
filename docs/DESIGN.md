@@ -386,19 +386,37 @@ tester
 fixer
 ```
 
+`files` は確定したGit作業ツリーのルートからの相対パスとする。
+
+作業場所が未確定なら `status: "needs_input"` と `workspace_input` を返す。
+`workspace_input` には質問（`question`）を含める。指定された起点の
+解決に失敗した場合は、そのディレクトリ（`directory`）と理由（`reason`）も返す。
+この応答ではソースファイルの読み取り、LLM呼び出し、Pi worktree作成を行わない。
+呼び出し元はユーザーに作業場所を聞く。クライアントが開いている
+ワークスペースなど確かな候補を持つ場合は提示して選んでもらう。
+ユーザーが指定または選択したディレクトリの絶対パスを
+`repository_directory` に入れ、元のリクエストを再送する。
+入力が無効なら作業を開始せず、理由を返して再指定を求める。
+すでに確定したGitルートと異なる場所を指定した場合はエラーを返す。
+
 ---
 
 ## 9.2 local_agent_health
 
 動作確認用。
 
-確認対象はMain LLMとCoding LLMとする。各LLMへ有限timeoutで個別に接続し、接続拒否による停止とHTTP/応答の失敗を区別する。いずれかのLLMが停止していてもMCP Serverは動作を続ける。
+Main LLMとCoding LLMへ有限timeoutで個別に接続し、接続拒否による停止とHTTP/応答の失敗を区別する。いずれかのLLMが停止していてもMCP Serverは動作を続ける。
+`workspace_status` は `ready` または `needs_input` とし、確定時は
+`repository_root`、未確定時は `workspace_input` を返す。
+作業場所の状態はLLM/Piの接続状態を示す `status` と独立に報告する。
 
 レスポンス例：
 
 ```json
 {
   "status": "ok",
+  "workspace_status": "ready",
+  "repository_root": "/home/user/projects/example",
   "llm": "available",
   "main_llm": {"status": "available", "base_url": "http://127.0.0.1:8089", "model": "qwen3.8-27b"},
   "coding_llm": {"status": "available", "base_url": "http://127.0.0.1:8089", "model": "qwen-coder"}
@@ -790,7 +808,6 @@ MAC_TESTER_MAX_TOKENS
 MAC_FIXER_MAX_TOKENS
 MAC_LLM_REASONING_EFFORT
 MAC_LLM_TEMPERATURE
-MAC_REPOSITORY_ROOT
 MAC_LOG_LEVEL
 ```
 
@@ -826,6 +843,23 @@ Role固有の値が未指定なら`MAC_LLM_MAX_TOKENS`、それも未指定な�
 
 上記のModel名を標準Defaultとし、環境変数でllama-server側のモデルIDに合わせて変更できる。
 
+## 作業リポジトリの決定
+
+作業場所はローカルSTDIO MCPプロセスごとに一つのGit作業ツリーへ固定する。
+Claude Codeでは起動時の `CLAUDE_PROJECT_DIR` を使う。Codexなど、セッションの
+作業場所がMCPプロセスのカレントディレクトリになることを確認済みの起動経路では、
+MCP登録に一度だけ `--workspace-from-cwd` を指定する。CodexのMCP設定で
+`cwd` を固定すると、その値が起点になるため、自動検出用の登録では省略する。
+セッションの作業場所がどちらの経路でも得られない場合は未確定で接続を維持する。
+
+起点は絶対ディレクトリパスとし、有限timeoutの
+`git -C <起点> rev-parse --show-toplevel` でGit作業ツリーのルートを取得する。
+結果を実体パスに正規化して、Directのファイル読み取りとPiのworktree作成元に共用する。
+linked worktreeやsubmoduleでは起点を含むGit作業ツリーを使う。
+Git管理外などの解決エラーでも接続を維持し、作業場所の指定を求める。
+Gitの作業ツリーやインデックスを差し替える継承環境変数はMACのGitコマンドとPiプロセスに渡さない。
+別の作業ツリーに切り替えるときは、その場所で新しいMCPプロセスを起動する。
+
 ---
 
 # 24. Logging
@@ -851,9 +885,9 @@ status
 
 Prompt全文およびソースコード全文はDefaultではログへ記録しない。
 
-CodexからSTDIO Serverを起動する際は、`scripts/run-mcp-server` に `qwen` または `strata` を渡す。ラッパーはRepository Rootにある信頼済みの `.env.qwen` または `.env.strata` をBashで読み込み、設定を子プロセスへ渡す。Repository Rootの実行ファイル `multi-agent-coder` を優先し、実行できない場合は `bin/multi-agent-coder` を探す。Repository Rootの `run-mcp-server` からも同じラッパーを起動できる。
+STDIO Serverを起動する際は、`scripts/run-mcp-server` に `qwen` または `strata` を渡す。ラッパーはMACの設置ディレクトリにある信頼済みの `.env.qwen` または `.env.strata` をBashで読み込み、設定を子プロセスへ渡す。同じ設置ディレクトリの実行ファイル `multi-agent-coder` を優先し、実行できない場合は `bin/multi-agent-coder` を探す。設置ディレクトリの `run-mcp-server` からも同じラッパーを起動できる。
 
-`scripts/run-mcp-server` は省略可能な第2引数で呼び出し元（`codex` または `claude-code`、既定 `codex`）を受け取る。ラッパーは `.env.<profile>` を読み込んだ後で `MAC_ORCHESTRATOR` に第2引数の値をexportする。不正な第2引数、または3個以上の引数ではUsageをstderrに出して終了コード2で終了する。詳細は「Claude Code対応」の節を参照する。
+`scripts/run-mcp-server` は省略可能な第2引数で呼び出し元（`codex` または `claude-code`、既定 `codex`）を受け取り、第3引数の `--workspace-from-cwd` はServerに渡す。ラッパーは `.env.<profile>` を読み込んだ後で `MAC_ORCHESTRATOR` を設定し、元の作業ディレクトリとクライアントが渡した `CLAUDE_PROJECT_DIR` を引き継ぐ。不正な引数ではUsageをstderrに出して終了コード2で終了する。
 
 ラッパーはstderrを親プロセスへ転送し、`logs/multi-agent-coder-<profile>-YYYY-MM-DD.log` に保存する。ラッパー自体はstdoutに出力しない。ログのディレクトリは `MAC_LOG_DIR` で変更できる。
 
@@ -1194,16 +1228,16 @@ Git履歴操作
 
 # 33. Claude Code対応
 
-Codexに加えて、Claude CodeからもMCP Serverとして呼び出せるようにする。Codexからの登録手順と挙動は変えない。
+Codexに加えて、Claude CodeからもMCP Serverとして呼び出せるようにする。
 
 ## Orchestratorの選択
 
-呼び出し元は `MAC_ORCHESTRATOR`（`codex` | `claude-code`）で表す。未設定時は `codex` とし、従来とまったく同じ挙動にする。
+呼び出し元は `MAC_ORCHESTRATOR`（`codex` | `claude-code`）で表す。未設定時は `codex` とする。
 
 `.env.qwen` / `.env.strata` はCodexとClaude Codeで共有する。`.env` はBashの `source` で読み込まれ既存の環境変数を上書きするため、呼び出し元は `.env` ではなく `scripts/run-mcp-server` の第2引数で渡す。ラッパーは `.env` の読み込み後に `MAC_ORCHESTRATOR` を設定し、`.env` の同名の行より起動引数を優先する。
 
 ```text
-Codex:       scripts/run-mcp-server qwen
+Codex:       scripts/run-mcp-server qwen codex --workspace-from-cwd
 Claude Code: scripts/run-mcp-server qwen claude-code
 ```
 
@@ -1246,6 +1280,6 @@ Claude Codeから作業する場合、本書でCodexが担当すると定めた�
 
 Claude Code用の指示は `CLAUDE.md`（`AGENTS.md` を取り込む）と `.claude/skills/multi-agent-coder-delegation/SKILL.md` に置く。
 
-## Codex挙動を変えない方針
+## クライアントごとの応答形式
 
-`codex`（未設定を含む）の場合、Prompt、`local_agent_run` の応答、`isError` の扱いを従来から変えない。追加はログと `local_agent_health` の `orchestrator` フィールドのみとする。既存の公開API、関数シグネチャ、環境変数、既定値、Codexからの登録手順は変えない。
+`codex`（未設定を含む）の場合はCodex用のPromptを使い、Claude Code向けの応答切り詰めと `isError` の設定は適用しない。作業リポジトリの確定と `needs_input` の扱いは両クライアントで共通とする。

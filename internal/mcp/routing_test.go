@@ -63,13 +63,14 @@ func TestLocalAgentRunRoutesAllRolesDirectly(t *testing.T) {
 				MainLLM:      config.LLMConfig{BaseURL: main.URL, Model: "main-test", Timeout: time.Second},
 				CodingLLM:    config.LLMConfig{BaseURL: coding.URL, Model: "coding-test", Timeout: 2 * time.Second},
 				LLMMaxTokens: 1024, CoderMaxTokens: 4096, ReviewerMaxTokens: 4096, TesterMaxTokens: 3072, FixerMaxTokens: 4096,
-				LLMReasoningEffort: "none", LLMTemperature: 0.2, RepositoryRoot: t.TempDir(),
+				LLMReasoningEffort: "none", LLMTemperature: 0.2,
 			}
 			resolved, resolvedMaxTokens := directConfigForRole(cfg, agent.Role(tc.role))
 			if resolved.Model != tc.model || resolved.Timeout != tc.timeout || resolvedMaxTokens != tc.maxTokens {
 				t.Fatalf("resolved config = %+v max_tokens=%d", resolved, resolvedMaxTokens)
 			}
-			out := runMCPRole(t, cfg, tc.role)
+			root, _ := makeWorkspace(t, tc.role)
+			out := runMCPRole(t, cfg, root, tc.role)
 			if out["status"] != "success" || out["backend"] != "direct" {
 				t.Fatalf("output = %#v", out)
 			}
@@ -103,8 +104,8 @@ printf '%s\n' '{"id":"mac-prompt","type":"response","success":true}' '{"type":"a
 	if err := os.WriteFile(pi, []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
-	cfg := config.Config{CoderBackend: "pi", PiExecutable: pi, PiProvider: "local-qwen", PiModel: "qwen", MainLLM: config.LLMConfig{BaseURL: "http://127.0.0.1:1", Model: "main", Timeout: time.Second}, CodingLLM: config.LLMConfig{BaseURL: "http://127.0.0.1:1", Model: "coding", Timeout: time.Second}, RepositoryRoot: root}
-	out := runMCPRole(t, cfg, "coder")
+	cfg := config.Config{CoderBackend: "pi", PiExecutable: pi, PiProvider: "local-qwen", PiModel: "qwen", MainLLM: config.LLMConfig{BaseURL: "http://127.0.0.1:1", Model: "main", Timeout: time.Second}, CodingLLM: config.LLMConfig{BaseURL: "http://127.0.0.1:1", Model: "coding", Timeout: time.Second}}
+	out := runMCPRole(t, cfg, root, "coder")
 	if out["status"] != "success" || out["backend"] != "pi" || !strings.Contains(out["patch"].(string), "new from pi") {
 		t.Fatalf("Pi MCP output = %#v", out)
 	}
@@ -144,8 +145,8 @@ printf '%s\n' '{"id":"mac-prompt","type":"response","success":true}' '{"type":"a
 	if err := os.WriteFile(pi, []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
-	cfg := config.Config{FixerBackend: "pi", PiExecutable: pi, PiProvider: "local-qwen", PiModel: "qwen", MainLLM: config.LLMConfig{BaseURL: "http://127.0.0.1:1", Model: "main", Timeout: time.Second}, CodingLLM: config.LLMConfig{BaseURL: "http://127.0.0.1:1", Model: "coding", Timeout: time.Second}, RepositoryRoot: root}
-	out := runMCPRole(t, cfg, "fixer", "target.go")
+	cfg := config.Config{FixerBackend: "pi", PiExecutable: pi, PiProvider: "local-qwen", PiModel: "qwen", MainLLM: config.LLMConfig{BaseURL: "http://127.0.0.1:1", Model: "main", Timeout: time.Second}, CodingLLM: config.LLMConfig{BaseURL: "http://127.0.0.1:1", Model: "coding", Timeout: time.Second}}
+	out := runMCPRole(t, cfg, root, "fixer", "target.go")
 	patch, _ := out["patch"].(string)
 	if out["status"] != "success" || out["backend"] != "pi" || !strings.Contains(patch, "-CODER_VERSION") || !strings.Contains(patch, "+FIXER_VERSION") || strings.Contains(patch, "HEAD_VERSION") || strings.Contains(patch, "UNRELATED_DIRTY") {
 		t.Fatalf("Fixer Pi output includes incorrect baseline/diff: %#v", out)
@@ -164,9 +165,9 @@ func runRoutingGit(t *testing.T, dir string, args ...string) {
 	}
 }
 
-func runMCPRole(t *testing.T, cfg config.Config, role string, files ...string) map[string]any {
+func runMCPRole(t *testing.T, cfg config.Config, directory, role string, files ...string) map[string]any {
 	t.Helper()
-	server, err := NewServer(cfg, discardLogger())
+	server, err := NewServer(context.Background(), cfg, discardLogger(), directory)
 	if err != nil {
 		t.Fatal(err)
 	}

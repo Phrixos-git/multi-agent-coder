@@ -28,9 +28,14 @@ MAC_LIVE_IMPLEMENTATION_E2E=1 go test -v ./internal/mcp -run '^TestLiveImplement
 ```
 
 This optional test uses the current Go source and in-memory MCP transport. It
-does not register or start the installed STDIO binary. It replaces
-`MAC_REPOSITORY_ROOT` with a disposable Git repository containing only a small
+does not register or start the installed STDIO binary. It supplies
+a disposable Git repository as the MCP server's workspace directory, containing only a small
 interval-normalization fixture. It never applies agent changes to this checkout.
+
+Workspace selection is covered separately with disposable Git repositories.
+The checks exercise startup from a nested directory, checkout isolation,
+workspace selection after `needs_input`, and Pi worktree creation in the
+selected repository.
 
 The fixture contract and tests are supplied before implementation. Coder
 implements `Normalize` from a stub. In a separate repository, fixer receives a
@@ -163,10 +168,12 @@ claude -p --strict-mcp-config --mcp-config /tmp/mac-claude-mcp.json \
   'Call mcp__multi-agent-coder__local_agent_health once and print its JSON result verbatim.'
 ```
 
-Pass: the tool result contains `"orchestrator":"claude-code"`. Repeating the
-call through `scripts/run-mcp-server qwen` (no second argument) must report
-`"orchestrator":"codex"`, including when `.env.qwen` contains
-`MAC_ORCHESTRATOR=codex` and the launcher argument is `claude-code`.
+Pass: the tool result contains `"orchestrator":"claude-code"` and the
+Git worktree root in `repository_root`. A profile value of
+`MAC_ORCHESTRATOR=codex` cannot override the `claude-code` argument.
+In a local Codex session, the launcher arguments
+`qwen codex --workspace-from-cwd` must report `"orchestrator":"codex"`
+and the worktree opened by that session.
 
 ### CC-01: normal delegation
 

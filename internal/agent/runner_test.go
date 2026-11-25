@@ -80,7 +80,7 @@ func TestRunnerPropagatesBackendError(t *testing.T) {
 
 func TestRoleRoutingUsesPiForCoderOnly(t *testing.T) {
 	direct := &recordingBackend{}
-	runner := NewRunnerWithRoleBackends(map[Role]Backend{RoleCoder: NewPiBackend(config.Config{}), RoleReviewer: direct, RoleTester: direct, RoleFixer: direct})
+	runner := NewRunnerWithRoleBackends(map[Role]Backend{RoleCoder: NewPiBackend(config.Config{}, ""), RoleReviewer: direct, RoleTester: direct, RoleFixer: direct})
 	for _, role := range []Role{RoleCoder, RoleReviewer, RoleTester, RoleFixer} {
 		want := role == RoleCoder
 		if got := runner.UsesPi(role); got != want {

@@ -7,7 +7,6 @@ import (
 	"github.com/arietis/multi-agent-coder/internal/agent"
 	"github.com/arietis/multi-agent-coder/internal/config"
 	"github.com/arietis/multi-agent-coder/internal/llm"
-	"github.com/arietis/multi-agent-coder/internal/workspace"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -22,7 +21,7 @@ type Server struct {
 }
 
 // NewServer constructs the server and registers its tools.
-func NewServer(cfg config.Config, logger *slog.Logger) (*Server, error) {
+func NewServer(ctx context.Context, cfg config.Config, logger *slog.Logger, directory string) (*Server, error) {
 	backends := make(map[agent.Role]agent.Backend, 4)
 	for _, role := range []agent.Role{agent.RoleCoder, agent.RoleFixer, agent.RoleReviewer, agent.RoleTester} {
 		endpoint, maxTokens := directConfigForRole(cfg, role)
@@ -36,14 +35,17 @@ func NewServer(cfg config.Config, logger *slog.Logger) (*Server, error) {
 		}
 		backends[role] = direct
 	}
-	piBackend := agent.NewPiBackend(cfg)
-	if cfg.CoderBackend == "pi" {
-		backends[agent.RoleCoder] = piBackend
-	}
-	if cfg.FixerBackend == "pi" {
-		backends[agent.RoleFixer] = piBackend
-	}
-	return newServerWithBackends(cfg, logger, backends)
+	selection := newWorkspaceSelection(ctx, directory, func(root string) agentRunner {
+		piBackend := agent.NewPiBackend(cfg, root)
+		if cfg.CoderBackend == "pi" {
+			backends[agent.RoleCoder] = piBackend
+		}
+		if cfg.FixerBackend == "pi" {
+			backends[agent.RoleFixer] = piBackend
+		}
+		return agent.NewRunnerWithRoleBackends(backends)
+	})
+	return newServerWithWorkspace(cfg, logger, selection), nil
 }
 
 // directConfigForRole resolves routing before the HTTP client is constructed.
@@ -62,26 +64,11 @@ func directConfigForRole(cfg config.Config, role agent.Role) (config.LLMConfig, 
 	}
 }
 
-func newServer(cfg config.Config, logger *slog.Logger, completer agent.ChatCompleter) (*Server, error) {
-	direct, err := agent.NewDirectBackendForOrchestrator(completer, cfg.Orchestrator)
-	if err != nil {
-		return nil, err
-	}
-	return newServerWithBackends(cfg, logger, map[agent.Role]agent.Backend{
-		agent.RoleCoder: direct, agent.RoleFixer: direct, agent.RoleReviewer: direct, agent.RoleTester: direct,
-	})
-}
-
-func newServerWithBackends(cfg config.Config, logger *slog.Logger, backends map[agent.Role]agent.Backend) (*Server, error) {
-	reader, err := workspace.NewReader(cfg.RepositoryRoot)
-	if err != nil {
-		return nil, err
-	}
-	runner := agent.NewRunnerWithRoleBackends(backends)
+func newServerWithWorkspace(cfg config.Config, logger *slog.Logger, selection *workspaceSelection) *Server {
 	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: serverName, Version: serverVersion}, nil)
-	registerHealthTool(server, cfg, logger)
-	registerRunTool(server, runner, reader, cfg, logger)
-	return &Server{server: server}, nil
+	registerHealthTool(server, selection, cfg, logger)
+	registerRunTool(server, selection.run, cfg, logger)
+	return &Server{server: server}
 }
 
 // Run serves MCP messages on stdin and stdout until the context is canceled.

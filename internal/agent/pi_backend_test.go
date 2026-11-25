@@ -34,8 +34,8 @@ printf '%s\n' '{"id":"mac-prompt","type":"response","success":true,"command":"pr
 	if err := os.WriteFile(executable, []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
-	cfg := config.Config{RepositoryRoot: root, PiExecutable: executable, PiProvider: "local-qwen", PiModel: "qwen", CoderBackend: "pi"}
-	backend := NewPiBackend(cfg)
+	cfg := config.Config{PiExecutable: executable, PiProvider: "local-qwen", PiModel: "qwen", CoderBackend: "pi"}
+	backend := NewPiBackend(cfg, root)
 	raw, err := backend.Run(context.Background(), PromptInput{Role: RoleCoder, Task: "add a generated file", Files: []File{{Path: "starting.go", Content: "must not be sent"}}})
 	if err != nil {
 		t.Fatal(err)
@@ -179,7 +179,7 @@ func newFakePiBackend(t *testing.T, body string) *PiBackend {
 	if err := os.WriteFile(executable, []byte("#!/bin/sh\n"+body), 0700); err != nil {
 		t.Fatal(err)
 	}
-	return NewPiBackend(config.Config{RepositoryRoot: root, PiExecutable: executable, PiProvider: "local-qwen", PiModel: "qwen"})
+	return NewPiBackend(config.Config{PiExecutable: executable, PiProvider: "local-qwen", PiModel: "qwen"}, root)
 }
 
 func runPiTestGit(t *testing.T, dir string, args ...string) {

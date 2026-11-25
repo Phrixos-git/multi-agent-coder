@@ -1,7 +1,6 @@
 package workspace
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,6 +13,9 @@ type Worktree struct{ root, path, branch, base, baseline, tempParent string }
 
 // CreateWorktree creates a temporary branch and checkout from the repository HEAD.
 func CreateWorktree(repositoryRoot, requestID string) (*Worktree, bool, error) {
+	if repositoryRoot == "" {
+		return nil, false, fmt.Errorf("WorktreeCreateError: repository root is required")
+	}
 	root, err := filepath.Abs(repositoryRoot)
 	if err != nil {
 		return nil, false, err
@@ -185,14 +187,8 @@ func (w *Worktree) gitWithIndex(index string, args ...string) error {
 func (w *Worktree) gitWithIndexOutput(index string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = w.path
-	cmd.Env = append(os.Environ(), "GIT_INDEX_FILE="+index)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
-	}
-	return stdout.String(), nil
+	cmd.Env = append(GitWorktreeEnv(cmd), "GIT_INDEX_FILE="+index)
+	return runGitCommand(cmd)
 }
 
 // Cleanup unregisters the worktree and removes its temporary branch.
@@ -209,11 +205,5 @@ func (w *Worktree) Cleanup() error {
 func gitOutput(dir string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
-	}
-	return stdout.String(), nil
+	return runGitCommand(cmd)
 }

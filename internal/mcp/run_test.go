@@ -22,12 +22,12 @@ import (
 )
 
 func TestLocalAgentRunConnectsMCPToLLM(t *testing.T) {
-	root := t.TempDir()
+	root, _ := makeWorkspace(t, "run")
 	if err := os.WriteFile(filepath.Join(root, "input.go"), []byte("package sample\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	completer := &recordingCompleter{}
-	server, err := newServer(config.Config{RepositoryRoot: root}, discardLogger(), completer)
+	server, err := newServer(context.Background(), config.Config{}, discardLogger(), completer, root)
 	if err != nil {
 		t.Fatal(err)
 	}

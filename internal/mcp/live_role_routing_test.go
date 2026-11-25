@@ -39,12 +39,11 @@ func TestLiveRoleRouting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load live E2E configuration: %v", err)
 	}
-	base.RepositoryRoot = repo
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 	base.MainLLM.Model = liveModelID(t, ctx, base.MainLLM)
 	base.CodingLLM.Model = liveModelID(t, ctx, base.CodingLLM)
-	health := liveCallTool(t, ctx, base, "local_agent_health", nil)
+	health := liveCallTool(t, ctx, base, repo, "local_agent_health", nil)
 	if health["status"] != "ok" || health["main_llm"].(map[string]any)["status"] != "available" || health["coding_llm"].(map[string]any)["status"] != "available" {
 		t.Fatalf("live health = %#v", health)
 	}
@@ -67,7 +66,7 @@ func TestLiveRoleRouting(t *testing.T) {
 			if tc.role == "coder" || tc.role == "fixer" {
 				file = "broken.go"
 			}
-			out := liveCallTool(t, ctx, cfg, "local_agent_run", map[string]any{"role": tc.role, "task": tc.task, "files": []string{file}})
+			out := liveCallTool(t, ctx, cfg, repo, "local_agent_run", map[string]any{"role": tc.role, "task": tc.task, "files": []string{file}})
 			if out["status"] != "success" || out["role"] != tc.role || out["backend"] != "direct" {
 				t.Fatalf("live %s output = %#v", tc.role, out)
 			}
@@ -150,9 +149,9 @@ func TestLiveModelIDDiscoversModel(t *testing.T) {
 	}
 }
 
-func liveCallTool(t *testing.T, ctx context.Context, cfg config.Config, name string, args map[string]any) map[string]any {
+func liveCallTool(t *testing.T, ctx context.Context, cfg config.Config, directory, name string, args map[string]any) map[string]any {
 	t.Helper()
-	server, err := NewServer(cfg, discardLogger())
+	server, err := NewServer(ctx, cfg, discardLogger(), directory)
 	if err != nil {
 		t.Fatal(err)
 	}

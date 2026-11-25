@@ -46,11 +46,10 @@ func TestLocalAgentHealth(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer coding.Close()
-	server, err := NewServer(config.Config{
-		MainLLM:        config.LLMConfig{BaseURL: main.URL, Model: "main", Timeout: time.Second},
-		CodingLLM:      config.LLMConfig{BaseURL: coding.URL, Model: "coding", Timeout: time.Second},
-		RepositoryRoot: t.TempDir(),
-	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server, err := NewServer(context.Background(), config.Config{
+		MainLLM:   config.LLMConfig{BaseURL: main.URL, Model: "main", Timeout: time.Second},
+		CodingLLM: config.LLMConfig{BaseURL: coding.URL, Model: "coding", Timeout: time.Second},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,11 +99,10 @@ func TestLocalAgentHealthKeepsServingWhenCodingLLMStopped(t *testing.T) {
 	coding := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	codingURL := coding.URL
 	coding.Close()
-	server, err := NewServer(config.Config{
-		MainLLM:        config.LLMConfig{BaseURL: main.URL, Timeout: time.Second},
-		CodingLLM:      config.LLMConfig{BaseURL: codingURL, Timeout: time.Second},
-		RepositoryRoot: t.TempDir(),
-	}, discardLogger())
+	server, err := NewServer(context.Background(), config.Config{
+		MainLLM:   config.LLMConfig{BaseURL: main.URL, Timeout: time.Second},
+		CodingLLM: config.LLMConfig{BaseURL: codingURL, Timeout: time.Second},
+	}, discardLogger(), "")
 	if err != nil {
 		t.Fatal(err)
 	}

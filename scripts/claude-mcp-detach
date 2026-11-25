@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Remove the multi-agent-coder MCP server from Claude Code.
+#
+# Usage: scripts/claude-mcp-detach [local|user|project]
+#
+# Without a scope, the server is removed from whichever scope has it. Run
+# this from the same project directory used for scripts/claude-mcp-attach
+# when the registration has local scope. Detaching an unregistered server
+# is not an error.
+
+set -euo pipefail
+
+server_name="multi-agent-coder"
+
+usage() {
+    printf 'Usage: %s [local|user|project]\n' "$0" >&2
+}
+
+if [[ $# -gt 1 ]]; then
+    usage
+    exit 2
+fi
+
+scope_args=()
+if [[ $# -eq 1 ]]; then
+    case "$1" in
+        local|user|project) scope_args=(--scope "$1") ;;
+        *) usage; exit 2 ;;
+    esac
+fi
+
+if ! command -v claude >/dev/null 2>&1; then
+    printf 'claude command not found in PATH\n' >&2
+    exit 1
+fi
+
+if ! claude mcp get "${server_name}" >/dev/null 2>&1; then
+    printf '%s is not registered in Claude Code; nothing to detach.\n' "${server_name}"
+    exit 0
+fi
+
+claude mcp remove "${scope_args[@]}" "${server_name}"
+printf 'Detached %s. Restart Claude Code or run /mcp to apply.\n' "${server_name}"

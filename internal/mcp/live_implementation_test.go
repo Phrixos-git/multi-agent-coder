@@ -97,14 +97,13 @@ func TestLiveImplementationE2E(t *testing.T) {
 				t.Fatalf("challenge must start with failing contract tests: %v\n%s", testErr, output)
 			}
 			cfg := base
-			cfg.RepositoryRoot = repo
 			ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 			defer cancel()
 			task := "Implement Normalize in intervals.go according to CONTRACT.md. Acceptance tests already exist; do not modify them. Run go test ./... before and after the change. Change only intervals.go."
 			if role == "fixer" {
 				task = "Repair Normalize in intervals.go: adjacent intervals are not merged. Follow CONTRACT.md, preserve correct validation and input immutability, and handle extreme machine integers. Run the failing tests before repair and go test ./... afterward. Change only intervals.go."
 			}
-			result := liveCallTool(t, ctx, cfg, "local_agent_run", map[string]any{
+			result := liveCallTool(t, ctx, cfg, repo, "local_agent_run", map[string]any{
 				"role": role, "task": task,
 				"files": []string{"intervals.go", "CONTRACT.md", "intervals_test.go", "go.mod"},
 			})

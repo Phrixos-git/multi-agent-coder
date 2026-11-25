@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Register multi-agent-coder as an MCP server in Claude Code.
+#
+# Usage: scripts/claude-mcp-attach {qwen|strata} [local|user|project]
+#
+# The scope defaults to local, which registers the server only for the
+# project in the current directory. Run this from the project where you use
+# Claude Code. An existing registration in the same scope is replaced, so
+# the command can also switch profiles.
+
+set -euo pipefail
+
+repository_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+server_name="multi-agent-coder"
+
+usage() {
+    printf 'Usage: %s {qwen|strata} [local|user|project]\n' "$0" >&2
+}
+
+if [[ $# -lt 1 || $# -gt 2 ]]; then
+    usage
+    exit 2
+fi
+
+profile="$1"
+scope="${2:-local}"
+
+case "${profile}" in
+    qwen|strata) ;;
+    *) usage; exit 2 ;;
+esac
+case "${scope}" in
+    local|user|project) ;;
+    *) usage; exit 2 ;;
+esac
+
+if ! command -v claude >/dev/null 2>&1; then
+    printf 'claude command not found in PATH\n' >&2
+    exit 1
+fi
+if [[ ! -f "${repository_root}/.env.${profile}" ]]; then
+    printf 'MAC env file not found: %s\n' "${repository_root}/.env.${profile}" >&2
+    exit 1
+fi
+if [[ ! -x "${repository_root}/multi-agent-coder" && ! -x "${repository_root}/bin/multi-agent-coder" ]]; then
+    printf 'multi-agent-coder executable not found. Build it first:\n' >&2
+    printf '  (cd %s && go build -o ./multi-agent-coder ./cmd/multi-agent-coder)\n' "${repository_root}" >&2
+    exit 1
+fi
+
+# Replace an existing registration in this scope; ignore "not found".
+claude mcp remove --scope "${scope}" "${server_name}" >/dev/null 2>&1 || true
+
+claude mcp add --scope "${scope}" "${server_name}" -- \
+    "${repository_root}/scripts/run-mcp-server" "${profile}" claude-code
+
+printf 'Attached %s (profile=%s, scope=%s). Restart Claude Code or run /mcp to reconnect.\n' \
+    "${server_name}" "${profile}" "${scope}"

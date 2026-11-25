@@ -22,7 +22,6 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("MAC_FIXER_MAX_TOKENS", "")
 	t.Setenv("MAC_LLM_REASONING_EFFORT", "")
 	t.Setenv("MAC_LLM_TEMPERATURE", "")
-	t.Setenv("MAC_REPOSITORY_ROOT", t.TempDir())
 	t.Setenv("MAC_LOG_LEVEL", "")
 
 	cfg, err := Load()
@@ -44,7 +43,6 @@ func TestLoadDefaults(t *testing.T) {
 }
 
 func TestLoadPiBackendAndUnlimitedTimeout(t *testing.T) {
-	t.Setenv("MAC_REPOSITORY_ROOT", t.TempDir())
 	t.Setenv("MAC_CODER_BACKEND", "pi")
 	t.Setenv("MAC_PI_TIMEOUT", "0")
 	t.Setenv("MAC_PI_EXECUTABLE", "/tmp/pi")
@@ -63,7 +61,6 @@ func TestLoadPiBackendAndUnlimitedTimeout(t *testing.T) {
 func TestLoadCoderAndFixerBackendsAreIndependent(t *testing.T) {
 	for _, pair := range []struct{ coder, fixer string }{{"direct", "direct"}, {"pi", "direct"}, {"direct", "pi"}, {"pi", "pi"}} {
 		t.Run(pair.coder+"-"+pair.fixer, func(t *testing.T) {
-			t.Setenv("MAC_REPOSITORY_ROOT", t.TempDir())
 			t.Setenv("MAC_CODER_BACKEND", pair.coder)
 			t.Setenv("MAC_FIXER_BACKEND", pair.fixer)
 			cfg, err := Load()
@@ -75,7 +72,6 @@ func TestLoadCoderAndFixerBackendsAreIndependent(t *testing.T) {
 			}
 		})
 	}
-	t.Setenv("MAC_REPOSITORY_ROOT", t.TempDir())
 	t.Setenv("MAC_FIXER_BACKEND", "invalid")
 	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "MAC_FIXER_BACKEND") {
 		t.Fatalf("invalid fixer backend error = %v", err)
@@ -83,7 +79,6 @@ func TestLoadCoderAndFixerBackendsAreIndependent(t *testing.T) {
 }
 
 func TestLoadRejectsInvalidPiBackend(t *testing.T) {
-	t.Setenv("MAC_REPOSITORY_ROOT", t.TempDir())
 	t.Setenv("MAC_CODER_BACKEND", "unknown")
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() accepted invalid coder backend")
@@ -91,7 +86,6 @@ func TestLoadRejectsInvalidPiBackend(t *testing.T) {
 }
 
 func TestLoadRejectsPiRPCArgsThatOverrideRestrictedTools(t *testing.T) {
-	t.Setenv("MAC_REPOSITORY_ROOT", t.TempDir())
 	t.Setenv("MAC_PI_RPC_ARGS", "--tools read,write,grep")
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() accepted Pi tool override")
@@ -99,7 +93,6 @@ func TestLoadRejectsPiRPCArgsThatOverrideRestrictedTools(t *testing.T) {
 }
 
 func TestLoadLLMOverrides(t *testing.T) {
-	t.Setenv("MAC_REPOSITORY_ROOT", t.TempDir())
 	t.Setenv("MAC_LLM_TIMEOUT", "45s")
 	t.Setenv("MAC_LLM_BASE_URL", "http://127.0.0.1:19100")
 	t.Setenv("MAC_LLM_MODEL", "main-test")
@@ -124,7 +117,6 @@ func TestLoadLLMOverrides(t *testing.T) {
 }
 
 func TestLoadRoleTokenPrecedence(t *testing.T) {
-	t.Setenv("MAC_REPOSITORY_ROOT", t.TempDir())
 	t.Setenv("MAC_LLM_MAX_TOKENS", "2048")
 	for _, name := range []string{"MAC_CODER_MAX_TOKENS", "MAC_REVIEWER_MAX_TOKENS", "MAC_TESTER_MAX_TOKENS", "MAC_FIXER_MAX_TOKENS"} {
 		t.Setenv(name, "")
@@ -170,7 +162,6 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			t.Setenv("MAC_REPOSITORY_ROOT", t.TempDir())
 			t.Setenv(test.env, test.value)
 			if _, err := Load(); err == nil {
 				t.Fatal("Load() error = nil, want ConfigError")
@@ -180,7 +171,6 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 }
 
 func TestLoadOrchestratorAndClaudeDefaults(t *testing.T) {
-	t.Setenv("MAC_REPOSITORY_ROOT", t.TempDir())
 	t.Setenv("MAC_ORCHESTRATOR", "")
 	t.Setenv("MAC_CLAUDE_MAX_OUTPUT_CHARS", "")
 	t.Setenv("MAC_CLAUDE_TOOL_ERROR_FLAG", "")
@@ -206,7 +196,6 @@ func TestLoadOrchestratorAndClaudeValues(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.orchestrator+"-"+test.maxChars+"-"+test.errorFlag, func(t *testing.T) {
-			t.Setenv("MAC_REPOSITORY_ROOT", t.TempDir())
 			t.Setenv("MAC_ORCHESTRATOR", test.orchestrator)
 			t.Setenv("MAC_CLAUDE_MAX_OUTPUT_CHARS", test.maxChars)
 			t.Setenv("MAC_CLAUDE_TOOL_ERROR_FLAG", test.errorFlag)
@@ -233,7 +222,6 @@ func TestLoadRejectsInvalidOrchestratorAndClaudeValues(t *testing.T) {
 			{name: "error flag numeric", env: "MAC_CLAUDE_TOOL_ERROR_FLAG", value: "1"},
 		} {
 			t.Run(orchestrator+"/"+test.name, func(t *testing.T) {
-				t.Setenv("MAC_REPOSITORY_ROOT", t.TempDir())
 				t.Setenv("MAC_ORCHESTRATOR", orchestrator)
 				t.Setenv(test.env, test.value)
 				_, err := Load()

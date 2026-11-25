@@ -6,7 +6,6 @@ import (
 	"math"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -61,7 +60,6 @@ type Config struct {
 	FixerMaxTokens     int
 	LLMReasoningEffort string
 	LLMTemperature     float64
-	RepositoryRoot     string
 	LogLevel           string
 	// Orchestrator identifies the MCP client: codex (default) or claude-code.
 	Orchestrator string
@@ -79,15 +77,6 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	repositoryRoot := strings.TrimSpace(os.Getenv("MAC_REPOSITORY_ROOT"))
-	if repositoryRoot == "" {
-		var err error
-		repositoryRoot, err = os.Getwd()
-		if err != nil {
-			return Config{}, fmt.Errorf("ConfigError: determine repository root: %w", err)
-		}
-	}
-
 	timeout, err := parseDuration("MAC_LLM_TIMEOUT", defaultLLMTimeout)
 	if err != nil {
 		return Config{}, err
@@ -152,7 +141,6 @@ func Load() (Config, error) {
 		FixerMaxTokens:     fixerMaxTokens,
 		LLMReasoningEffort: envOrDefault("MAC_LLM_REASONING_EFFORT", defaultLLMReasoningEffort),
 		LLMTemperature:     temperature,
-		RepositoryRoot:     repositoryRoot,
 		LogLevel:           strings.ToLower(envOrDefault("MAC_LOG_LEVEL", defaultLogLevel)),
 
 		Orchestrator:         strings.ToLower(envOrDefault("MAC_ORCHESTRATOR", OrchestratorCodex)),
@@ -218,19 +206,6 @@ func (c *Config) validate() error {
 	if math.IsNaN(c.LLMTemperature) || c.LLMTemperature < 0 || c.LLMTemperature > 2 {
 		return fmt.Errorf("ConfigError: MAC_LLM_TEMPERATURE must be between 0 and 2")
 	}
-
-	root, err := filepath.Abs(c.RepositoryRoot)
-	if err != nil {
-		return fmt.Errorf("ConfigError: resolve MAC_REPOSITORY_ROOT: %w", err)
-	}
-	info, err := os.Stat(root)
-	if err != nil {
-		return fmt.Errorf("ConfigError: inspect MAC_REPOSITORY_ROOT: %w", err)
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("ConfigError: MAC_REPOSITORY_ROOT is not a directory")
-	}
-	c.RepositoryRoot = root
 
 	if _, ok := logLevels[c.LogLevel]; !ok {
 		return fmt.Errorf("ConfigError: MAC_LOG_LEVEL must be debug, info, warn, or error")

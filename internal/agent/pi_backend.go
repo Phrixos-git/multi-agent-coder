@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -26,9 +25,14 @@ const (
 )
 
 // PiBackend runs a coder or fixer in a fresh Pi RPC process and temporary worktree.
-type PiBackend struct{ cfg config.Config }
+type PiBackend struct {
+	cfg            config.Config
+	repositoryRoot string
+}
 
-func NewPiBackend(cfg config.Config) *PiBackend { return &PiBackend{cfg: cfg} }
+func NewPiBackend(cfg config.Config, repositoryRoot string) *PiBackend {
+	return &PiBackend{cfg: cfg, repositoryRoot: repositoryRoot}
+}
 
 func (b *PiBackend) Run(ctx context.Context, input PromptInput) (string, error) {
 	result, err := b.runPi(ctx, input)
@@ -79,7 +83,7 @@ type piResult struct {
 func (b *PiBackend) runPi(parent context.Context, input PromptInput) (result piResult, retErr error) {
 	result = piResult{Status: "success", Role: string(input.Role), Artifacts: []any{}, Findings: []any{}, Risks: []string{}, Notes: []string{}, Backend: "pi", ChangedFiles: []string{}, ExecutionResults: []string{}, Warnings: []string{}, PiModel: b.cfg.PiModel, PiExitStatus: "not_started"}
 	requestID := fmt.Sprintf("%d", time.Now().UnixNano())
-	wt, dirty, err := workspace.CreateWorktree(b.cfg.RepositoryRoot, requestID)
+	wt, dirty, err := workspace.CreateWorktree(b.repositoryRoot, requestID)
 	if err != nil {
 		return result, err
 	}
@@ -131,8 +135,9 @@ func (b *PiBackend) runPi(parent context.Context, input PromptInput) (result piR
 	}
 	cmd := exec.Command(b.cfg.PiExecutable, args...)
 	cmd.Dir = wt.Path()
+	cmd.Env = workspace.GitWorktreeEnv(cmd)
 	if b.cfg.PiAgentDir != "" {
-		cmd.Env = replaceEnv(os.Environ(), "PI_CODING_AGENT_DIR", b.cfg.PiAgentDir)
+		cmd.Env = replaceEnv(cmd.Env, "PI_CODING_AGENT_DIR", b.cfg.PiAgentDir)
 	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

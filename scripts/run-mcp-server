@@ -2,20 +2,30 @@
 
 set -euo pipefail
 
-repository_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+install_directory="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+launch_directory="$(pwd -P)"
+client_project_directory="${CLAUDE_PROJECT_DIR-}"
 
 usage() {
-    printf 'Usage: %s {qwen|strata} [codex|claude-code]\n' "$0" >&2
+    printf 'Usage: %s {qwen|strata} [codex|claude-code] [--workspace-from-cwd]\n' "$0" >&2
 }
 
 # Select model profile and MCP client (orchestrator)
-if [[ $# -lt 1 || $# -gt 2 ]]; then
+if [[ $# -lt 1 || $# -gt 3 ]]; then
     usage
     exit 2
 fi
 
 profile="$1"
 orchestrator="${2:-codex}"
+server_args=()
+if [[ $# -eq 3 ]]; then
+    if [[ "$3" != --workspace-from-cwd ]]; then
+        usage
+        exit 2
+    fi
+    server_args=("$3")
+fi
 
 case "${orchestrator}" in
     codex|claude-code)
@@ -28,10 +38,10 @@ esac
 
 case "${profile}" in
     qwen)
-        env_file="${repository_root}/.env.qwen"
+        env_file="${install_directory}/.env.qwen"
         ;;
     strata)
-        env_file="${repository_root}/.env.strata"
+        env_file="${install_directory}/.env.strata"
         ;;
     *)
         printf 'Unknown MAC profile: %s\n' "${profile}" >&2
@@ -48,22 +58,23 @@ fi
 umask 077
 
 set -a
-source "${env_file}"
+source "${env_file}" >&2
 set +a
 
-# The launcher argument identifies the MCP client. Export it after loading
-# the shared env file so that a MAC_ORCHESTRATOR line there cannot override it.
+# Preserve the client and workspace information across profile loading.
 export MAC_ORCHESTRATOR="${orchestrator}"
+export CLAUDE_PROJECT_DIR="${client_project_directory}"
+cd -- "${launch_directory}"
 
 # Locate MAC executable
-server_binary="${repository_root}/multi-agent-coder"
+server_binary="${install_directory}/multi-agent-coder"
 
 if [[ ! -x "${server_binary}" ]]; then
-    server_binary="${repository_root}/bin/multi-agent-coder"
+    server_binary="${install_directory}/bin/multi-agent-coder"
 fi
 
 # Configure logging
-log_directory="${MAC_LOG_DIR:-${repository_root}/logs}"
+log_directory="${MAC_LOG_DIR:-${install_directory}/logs}"
 
 mkdir -p -- "${log_directory}"
 
@@ -80,4 +91,4 @@ if [[ ! -x "${server_binary}" ]]; then
     exit 1
 fi
 
-exec "${server_binary}"
+exec "${server_binary}" "${server_args[@]}"

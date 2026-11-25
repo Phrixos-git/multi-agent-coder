@@ -42,7 +42,8 @@ func TestLocalAgentRunSystemPromptPerOrchestrator(t *testing.T) {
 	} {
 		t.Run("orchestrator="+test.orchestrator, func(t *testing.T) {
 			completer := &recordingCompleter{}
-			server, err := newServer(config.Config{RepositoryRoot: t.TempDir(), Orchestrator: test.orchestrator}, discardLogger(), completer)
+			root, _ := makeWorkspace(t, test.orchestrator)
+			server, err := newServer(context.Background(), config.Config{Orchestrator: test.orchestrator}, discardLogger(), completer, root)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -67,7 +68,9 @@ func TestLocalAgentRunSystemPromptPerOrchestrator(t *testing.T) {
 func runToolOnce(t *testing.T, cfg config.Config, response string) *sdkmcp.CallToolResult {
 	t.Helper()
 	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: serverName, Version: serverVersion}, nil)
-	registerRunTool(server, staticRunner{response: response}, noFilesReader{}, cfg, discardLogger())
+	registerRunTool(server, func(ctx context.Context, input RunInput) RunOutput {
+		return executeRun(ctx, staticRunner{response: response}, noFilesReader{}, input)
+	}, cfg, discardLogger())
 	session := connectInMemory(t, server)
 	result, err := session.CallTool(context.Background(), &sdkmcp.CallToolParams{Name: "local_agent_run", Arguments: map[string]any{
 		"role": "coder", "task": "task",
@@ -312,7 +315,7 @@ func TestLocalAgentHealthReportsOrchestrator(t *testing.T) {
 	for _, test := range []struct{ orchestrator, want string }{
 		{"", "codex"}, {config.OrchestratorCodex, "codex"}, {config.OrchestratorClaudeCode, "claude-code"},
 	} {
-		server, err := NewServer(config.Config{RepositoryRoot: t.TempDir(), Orchestrator: test.orchestrator}, discardLogger())
+		server, err := NewServer(context.Background(), config.Config{Orchestrator: test.orchestrator}, discardLogger(), "")
 		if err != nil {
 			t.Fatal(err)
 		}

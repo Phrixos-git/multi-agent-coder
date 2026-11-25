@@ -31,6 +31,11 @@ Keep every local LLM request small, focused, and independently completable.
 
 6. Validate the returned result yourself.
 
+   If `status` is `needs_input` and `workspace_input` is present, ask the user
+   which repository to use. Offer candidates only when the client has reliable
+   workspace information. Retry the same task with the user-selected absolute
+   directory in `repository_directory`. Use Git-root-relative paths in `files`.
+
 7. Apply the accepted change.
 
 8. Continue with the next task.

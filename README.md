@@ -80,15 +80,14 @@ codex mcp add multi-agent-coder \
   --env MAC_CODING_LLM_BASE_URL=http://127.0.0.1:8089 \
   --env MAC_CODING_LLM_MODEL=qwen-coder \
   --env MAC_CODING_LLM_TIMEOUT=180s \
-  --env MAC_REPOSITORY_ROOT=/absolute/path/to/target-repository \
-  -- /absolute/path/to/multi-agent-coder/multi-agent-coder
+  -- /absolute/path/to/multi-agent-coder/multi-agent-coder --workspace-from-cwd
 ```
 
 `MAC_PI_TIMEOUT=0`はPi Agent全体のHard Timeoutなしを意味します。MCP Context cancellation、Pi startup 15秒、RPC idle 300秒、shutdown grace 3秒は維持します。Piは`agent_settled`まで待ちます。PiはGit操作を行わず、PatchはworktreeのGit状態からMACが作ります。
 
 ## CodexへMCP Serverを追加
 
-次のコマンド内の `/absolute/path/to/multi-agent-coder` と `/absolute/path/to/target-repository` を、実際の絶対パスへ置き換えて実行します。`MAC_REPOSITORY_ROOT` には、このServer自身ではなくローカルAgentに読み取らせる対象Repositoryを指定します。
+次のコマンド内の `/absolute/path/to/multi-agent-coder` を、MACを設置した絶対パスへ置き換えて実行します。MCP登録は一度で済みます。作業するGitリポジトリでCodexを開くと、配下のサブディレクトリからでもMACがGitルートを特定します。
 
 ```bash
 codex mcp add multi-agent-coder \
@@ -105,9 +104,8 @@ codex mcp add multi-agent-coder \
   --env MAC_FIXER_MAX_TOKENS=4096 \
   --env MAC_LLM_REASONING_EFFORT=none \
   --env MAC_LLM_TEMPERATURE=0.2 \
-  --env MAC_REPOSITORY_ROOT=/absolute/path/to/target-repository \
   --env MAC_LOG_LEVEL=info \
-  -- /absolute/path/to/multi-agent-coder/multi-agent-coder
+  -- /absolute/path/to/multi-agent-coder/multi-agent-coder --workspace-from-cwd
 ```
 
 登録結果は次のコマンドで確認できます。
@@ -120,16 +118,24 @@ CLIによるSTDIO MCP Serverの登録形式については、[Codex公式MCPド�
 
 MCP Serverを再ビルドした場合、登録済みの実行ファイルと同じパスへ出力すればMCP設定の再登録は不要です。実行中のCodex CLIまたはIDE拡張機能には、再起動後に反映されます。
 
+### 作業リポジトリの確認
+
+`local_agent_health` の `workspace_status: "ready"` と `repository_root` で対象を確認できます。ローカルCodexの例にある `--workspace-from-cwd` は、クライアントがセッションの作業ディレクトリでMCPプロセスを起動する場合に使います。CodexのMCP設定で `cwd` を固定せず、作業したいリポジトリでセッションを開いてください。Claude Codeでは `CLAUDE_PROJECT_DIR` が起点になります。
+
+セッションの作業場所を引き継げない起動経路では `--workspace-from-cwd` を省略します。場所を取得できない場合やGit管理外の場合、`local_agent_run` は `status: "needs_input"` と `workspace_input` を返します。呼び出し元はユーザーに作業場所を聞き、指定または選択された絶対ディレクトリを `repository_directory` に入れて元の依頼を再送します。確定後、同じ接続ではパス指定が不要です。別の対象に切り替える場合は新しいMCPセッションを使います。`files` は表示されたGitルートからの相対パスです。
+
+以前の登録から切り替える場合は、既存の `MAC_REPOSITORY_ROOT` をプロファイルやMCP登録から削除できます。ローカルCodexで自動検出を使う場合は、起動引数を上記の例に合わせてからセッションを開き直してください。
+
 ### MCP stderrログの保存
 
-`scripts/run-mcp-server` をMCPの `command` に指定し、`args` で `qwen` または `strata` を選びます。`.env.example` をRepository直下の `.env.qwen` または `.env.strata` にコピーし、対象Repositoryとモデルの設定を記入してください。ラッパーは設定ファイルをBashで読み込むため、信頼できるファイルを使ってください。Repository直下の `run-mcp-server` からも同じコマンドを実行できます。
+`scripts/run-mcp-server` をMCPの `command` に指定し、`args` で `qwen` または `strata` を選びます。`.env.example` をMACの設置先の `.env.qwen` または `.env.strata` にコピーし、モデルの設定を記入してください。ラッパーは設定ファイルをBashで読み込むため、信頼できるファイルを使ってください。設置先の `run-mcp-server` からも同じコマンドを実行できます。
 
 stdoutはMCP Protocol専用です。stderrはCodexへ転送し、既定では `logs/multi-agent-coder-<profile>-YYYY-MM-DD.log` に保存します。`logs/` はGit管理対象外です。保存先は `MAC_LOG_DIR` で変更できます。
 
 ```toml
 [mcp_servers.multi-agent-coder]
 command = "/absolute/path/to/multi-agent-coder/scripts/run-mcp-server"
-args = ["qwen"]
+args = ["qwen", "codex", "--workspace-from-cwd"]
 ```
 
 設定変更後はCodex CLIまたはIDE拡張機能を再起動してください。`local_agent_health` はMain LLMとCoding LLMを個別に確認します。各LLMの `/v1/models` へ有限Timeoutで接続し、Coding LLM停止時は `coding_llm.status=stopped` と `status=degraded` を返します。MCP Serverは起動したままです。
@@ -148,10 +154,23 @@ claude mcp add multi-agent-coder -- /absolute/path/to/multi-agent-coder/scripts/
 claude mcp list
 ```
 
-`scripts/run-mcp-server` の引数は `{qwen|strata} [codex|claude-code]` です。
+取り付けと取り外しは、次のスクリプトでも行えます。scopeの既定は `local` で、カレントディレクトリのプロジェクトだけに登録します。Claude Codeを使うプロジェクトのディレクトリで実行してください。
+
+```bash
+# 取り付け（同じscopeの既存登録は置き換えるため、profileの切り替えにも使える）
+/absolute/path/to/multi-agent-coder/scripts/claude-mcp-attach qwen          # scope: local
+/absolute/path/to/multi-agent-coder/scripts/claude-mcp-attach strata user   # 全プロジェクトで使う場合
+
+# 取り外し（scope省略時は登録されているscopeから削除。未登録でもエラーにしない）
+/absolute/path/to/multi-agent-coder/scripts/claude-mcp-detach
+```
+
+反映には、Claude Codeの再起動か `/mcp` での再接続が必要です。Codexの登録（`~/.codex/config.toml`）には影響しません。
+
+`scripts/run-mcp-server` の引数は `{qwen|strata} [codex|claude-code] [--workspace-from-cwd]` です。
 
 - 第1引数は従来どおりモデルprofile（読み込む `.env.<profile>`）を選びます。
-- 第2引数は呼び出し元のMCP Clientです。省略時は `codex` で、従来とまったく同じ動作になります。`codex` / `claude-code` 以外の値や3個以上の引数を渡すと、Usageをstderrに出して終了コード2で終了します。
+- 第2引数は呼び出し元のMCP Clientです。省略時は `codex` です。第3引数の `--workspace-from-cwd` を使うときは、第2引数も指定します。不正な引数はUsageをstderrに出して終了コード2で終了します。
 - ラッパーは `.env.<profile>` を読み込んだ後で `MAC_ORCHESTRATOR` を第2引数の値に設定します。`.env` に `MAC_ORCHESTRATOR` の行があっても起動引数が優先されるため、`.env` には書かないでください。
 
 `claude-code` で起動した場合だけ、次の処理が加わります。`local_agent_health` の `orchestrator` フィールドで、どちらで起動したかを確認できます。
@@ -176,11 +195,10 @@ Claude Code用のSkillは `.claude/skills/multi-agent-coder-delegation/SKILL.md`
 
 ## 環境変数一覧
 
-Server本体が読み取る環境変数はすべて省略可能で、省略時はコード内の既定値を使用します。ただし、意図しないRepositoryを対象にしないよう、実運用では `MAC_REPOSITORY_ROOT` を明示してください。また、利用するLLMの実際の構成に合わせて接続先とモデル名を指定してください。
+Server本体が読み取る以下の環境変数は省略可能で、省略時はコード内の既定値を使用します。利用するLLMの実際の構成に合わせて接続先とモデル名を指定してください。
 
 | 環境変数 | 用途 | 既定値 |
 | --- | --- | --- |
-| `MAC_REPOSITORY_ROOT` | Agentが参照する対象Repository | Server起動時のカレントディレクトリ |
 | `MAC_LLM_BASE_URL` | reviewer/testerのMain LLM | `http://127.0.0.1:8089` |
 | `MAC_LLM_MODEL` | Main LLMのモデル名 | `qwen3.8-27b` |
 | `MAC_LLM_TIMEOUT` | Main LLMのリクエストTimeout | `180s` |
